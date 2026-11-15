@@ -1,13 +1,11 @@
 package com.flipfocus.app
 
-import android.accessibilityservice.AccessibilityService
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -59,10 +57,6 @@ object Scheduler {
     private fun serviceIntent(ctx: Context, s: ScheduleEntity) = serviceBase(ctx, s.id)
         .putExtra(FocusService.EXTRA_MIN, durationMin(s))
         .putExtra(FocusService.EXTRA_SCHEDULED, true)
-        .putStringArrayListExtra(
-            FocusService.EXTRA_APPS,
-            ArrayList(s.apps.split(",").filter { it.isNotBlank() }),
-        )
 
     /** Alarm-clock PendingIntents may start a foreground service even when the app is backgrounded. */
     private fun pi(ctx: Context, s: ScheduleEntity) = PendingIntent.getForegroundService(
@@ -119,8 +113,7 @@ class AlarmReceiver : BroadcastReceiver() {
                 val s = Db.get(ctx).dao().schedule(id)
                 if (s != null && s.enabled) {
                     if (FocusState.phase.value == Phase.IDLE) {
-                        val apps = s.apps.split(",").filter { it.isNotBlank() }.toSet()
-                        FocusService.start(ctx, Scheduler.durationMin(s), apps, scheduled = true, scheduleId = s.id)
+                        FocusService.start(ctx, Scheduler.durationMin(s), scheduled = true, scheduleId = s.id)
                     }
                     Scheduler.schedule(ctx, s)
                 }
@@ -136,51 +129,4 @@ class BootReceiver : BroadcastReceiver() {
             try { Scheduler.rescheduleAll(ctx) } finally { pending.finish() }
         }
     }
-}
-
-/** Blocks chosen apps and pauses vibration while a chosen utility app is in the foreground. */
-class BlockerService : AccessibilityService() {
-    private var lastLog = 0L
-    private var homePackages = emptySet<String>()
-
-    override fun onServiceConnected() {
-        super.onServiceConnected()
-        FocusState.utilityApps.value = Prefs.utility(this)
-        homePackages = packageManager.queryIntentActivities(
-            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
-            PackageManager.ResolveInfoFlags.of(0L),
-        ).map { it.activityInfo.packageName }.toSet()
-    }
-
-    override fun onAccessibilityEvent(e: AccessibilityEvent) {
-        if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        val pkg = e.packageName?.toString() ?: return
-
-        if (pkg in FocusState.utilityApps.value) { FocusState.setUtility(pkg); return }
-        if (isOverlay(pkg)) return // keyboard / lock-screen chrome while a utility app is open
-        if (pkg == packageName || pkg in homePackages) { FocusState.setUtility(null); return }
-        FocusState.setUtility(null) // utility app closed, home, launcher, or another app
-
-        val ph = FocusState.phase.value
-        if (ph == Phase.IDLE || ph == Phase.PAUSED_CALL) return
-        if (packageManager.getLaunchIntentForPackage(pkg) == null) return
-        if (pkg !in FocusState.blockedApps) return
-
-        startActivity(Intent(this, BlockActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("pkg", pkg))
-        val now = System.currentTimeMillis()
-        if (now - lastLog > 2_000) {
-            lastLog = now
-            val sid = FocusState.sessionId
-            val app = applicationContext
-            CoroutineScope(Dispatchers.IO).launch {
-                Db.get(app).dao().insertEvent(EventEntity(sessionId = sid, type = "BLOCK", ts = now, pkg = pkg))
-            }
-        }
-    }
-
-    private fun isOverlay(pkg: String): Boolean =
-        pkg == "com.android.systemui" || pkg.contains("inputmethod", true) ||
-            pkg.contains("keyboard", true) || pkg.endsWith(".ime", true)
-
-    override fun onInterrupt() { FocusState.setUtility(null) }
 }

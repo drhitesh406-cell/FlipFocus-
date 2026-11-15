@@ -1,4 +1,3 @@
 <resources>
     <string name="app_name">FlipFocus</string>
-    <string name="blocker_desc">Blocks chosen apps during focus sessions and pauses vibration while a chosen utility app is open, including scheduled sessions that start while the phone is locked. Window titles are not read, stored or sent anywhere.</string>
 </resources>

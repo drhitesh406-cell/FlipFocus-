@@ -221,20 +221,17 @@ fun FocusScreen() {
     val pendingTags by FocusState.pendingTags.collectAsState()
     val customTemplates by dao.templates().collectAsState(emptyList())
     var mins by rememberSaveable { mutableIntStateOf(25) }
-    var blocked by remember { mutableStateOf(Prefs.blocked(ctx)) }
     var customDialog by remember { mutableStateOf(false) }
     var confirming by remember { mutableStateOf(false) }
     var picking by remember { mutableStateOf("") }
     var showTemplates by remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        FocusService.start(ctx, mins, blocked)
+        FocusService.start(ctx, mins)
     }
 
     fun startWithTemplate(t: TemplateEntity) {
         mins = t.minutes
         if (t.apps.isNotBlank() || t.utilities.isNotBlank()) {
-            blocked = t.apps.split(",").filter { it.isNotBlank() }.toSet()
-            Prefs.setBlocked(ctx, blocked)
             val u = t.utilities.split(",").filter { it.isNotBlank() }.take(MAX_UTILITY_APPS).toSet()
             Prefs.setUtility(ctx, u)
             FocusState.utilityApps.value = u
@@ -245,7 +242,7 @@ fun FocusScreen() {
     val active = phase != Phase.IDLE
     if (showTemplates) {
         BackHandler { showTemplates = false }
-        TemplatesScreen(mins, blocked, utilityApps, { t ->
+        TemplatesScreen(mins, utilityApps, { t ->
             showTemplates = false
             startWithTemplate(t)
         }, { showTemplates = false })
@@ -257,11 +254,6 @@ fun FocusScreen() {
             Prefs.setUtility(ctx, set)
             FocusState.utilityApps.value = set
         }, MAX_UTILITY_APPS, "Utility apps (max $MAX_UTILITY_APPS)") { picking = "" }
-        return
-    }
-    if (picking == "blocked") {
-        BackHandler { picking = "" }
-        AppPicker(blocked, { set -> blocked = set; Prefs.setBlocked(ctx, set) }, Int.MAX_VALUE, "Blocked apps") { picking = "" }
         return
     }
     if (!active && pendingTags.isNotEmpty()) {
@@ -347,8 +339,7 @@ fun FocusScreen() {
                 }
                 Text("Manage templates", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { showTemplates = true }.padding(top = 8.dp, bottom = 8.dp))
                 Text("Test vibration", color = C.muted, fontSize = 14.sp, modifier = Modifier.clickable { testVibrate(ctx) }.padding(bottom = 8.dp))
-                Text("Utility apps · ${utilityApps.size}/$MAX_UTILITY_APPS", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { picking = "utility" }.padding(bottom = 6.dp))
-                Text("Blocked apps · ${blocked.size}", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { picking = "blocked" }.padding(bottom = 16.dp))
+                Text("Utility apps · ${utilityApps.size}/$MAX_UTILITY_APPS", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { picking = "utility" }.padding(bottom = 16.dp))
                 Pill("Start focus", true, {
                     launcher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_PHONE_STATE))
                 }, Modifier.fillMaxWidth())
@@ -400,11 +391,11 @@ fun SchedulesScreen() {
     val runningId by FocusState.runningScheduleId.collectAsState()
     val scope = rememberCoroutineScope()
     var exact by remember { mutableStateOf(Scheduler.canExact(ctx)) }
-    var a11y by remember { mutableStateOf(false) }
+    var usage by remember { mutableStateOf(ctx.hasUsageAccess()) }
     var editing by remember { mutableStateOf<ScheduleEntity?>(null) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         exact = Scheduler.canExact(ctx)
-        a11y = (Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "").contains(ctx.packageName)
+        usage = ctx.hasUsageAccess()
         scope.launch(Dispatchers.IO) { Scheduler.rescheduleAll(ctx) }
     }
     val e = editing
@@ -424,10 +415,10 @@ fun SchedulesScreen() {
     }
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Title("Schedules") }
-        if (!a11y) item {
+        if (!usage) item {
             Tile {
-                Text("Turn on the accessibility service so utility apps pause vibration and blocked apps are closed during locked schedules.", color = C.muted, fontSize = 14.sp)
-                TextButton(onClick = { ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Open settings", color = C.accent) }
+                Text("Allow usage access so FlipFocus can see which app is open: utility apps pause vibration, and any other app you open during a session triggers a buzz.", color = C.muted, fontSize = 14.sp)
+                TextButton(onClick = { ctx.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }) { Text("Open settings", color = C.accent) }
             }
         }
         if (!exact) item {
@@ -440,7 +431,6 @@ fun SchedulesScreen() {
         }
         item { BatteryCard() }
         items(list, key = { it.id }) { s ->
-            val n = s.apps.split(",").count { it.isNotBlank() }
             val locked = runningId == s.id
             val conflict = Scheduler.conflict(s, list)
             Tile(Modifier.clickable(enabled = !locked) { editing = s }) {
@@ -462,7 +452,6 @@ fun SchedulesScreen() {
                         Text(d, color = if (s.days and (1 shl i) != 0) C.text else C.line, fontWeight = FontWeight.Medium, fontSize = 14.sp)
                     }
                     Spacer(Modifier.weight(1f))
-                    Text("$n apps", color = C.muted, fontSize = 13.sp)
                 }
                 if (conflict != null) Text("Overlaps ${conflict.name}", color = C.bad, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
                 if (locked) Text("Running · editing locked", color = C.accent, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
@@ -481,14 +470,11 @@ fun SchedulesScreen() {
 fun ScheduleEditor(init: ScheduleEntity, all: List<ScheduleEntity>, onClose: () -> Unit, onDelete: () -> Unit, onSave: (ScheduleEntity) -> Unit) {
     var name by remember { mutableStateOf(init.name) }
     var days by remember { mutableIntStateOf(init.days) }
-    var apps by remember { mutableStateOf(init.apps.split(",").filter { it.isNotBlank() }.toSet()) }
-    var picking by remember { mutableStateOf(false) }
     var conflictName by remember { mutableStateOf<String?>(null) }
     val st = rememberTimePickerState(init.startMin / 60, init.startMin % 60, false)
     val en = rememberTimePickerState(init.endMin / 60, init.endMin % 60, false)
     LaunchedEffect(name, days, st.hour, st.minute, en.hour, en.minute) { conflictName = null }
-    BackHandler { if (picking) picking = false else onClose() }
-    if (picking) { AppPicker(apps, { apps = it }) { picking = false }; return }
+    BackHandler { onClose() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Title(if (init.id == 0) "New schedule" else "Edit schedule")
         OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -510,19 +496,12 @@ fun ScheduleEditor(init: ScheduleEntity, all: List<ScheduleEntity>, onClose: () 
             Text("End · ${hhmm(en.hour * 60 + en.minute)}", color = C.muted)
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { TimePicker(state = en) }
         }
-        Tile(Modifier.clickable { picking = true }) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Blocked apps", color = C.text, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                Text("${apps.size} selected", color = C.muted)
-            }
-        }
         Text("12-hour clock. Overlapping enabled schedules are blocked. Monitoring starts even when the app is closed or locked.", color = C.muted, fontSize = 13.sp)
         if (conflictName != null) Text("Overlaps “$conflictName”. Adjust the days or times.", color = C.bad, fontSize = 13.sp)
         Pill("Save", true, {
             val candidate = init.copy(
                 name = name.ifBlank { "Focus" }, days = days,
                 startMin = st.hour * 60 + st.minute, endMin = en.hour * 60 + en.minute,
-                apps = apps.joinToString(","),
             )
             val c = Scheduler.conflict(candidate, all)
             if (c == null) onSave(candidate) else conflictName = c.name
@@ -568,9 +547,9 @@ fun StatsScreen() {
     val dao = Db.get(LocalContext.current).dao()
     val sessions by dao.sessions().collectAsState(emptyList())
     val bypass by dao.count("CALL_BYPASS").collectAsState(0)
-    val blocks by dao.count("BLOCK").collectAsState(0)
+    val opens by dao.count("APP_OPEN").collectAsState(0)
     val early by dao.count("EARLY_END").collectAsState(0)
-    val top by dao.topBlocked().collectAsState(emptyList())
+    val top by dao.topOpened().collectAsState(emptyList())
     val tagCounts by dao.tagCounts().collectAsState(emptyList())
     val pct = sessions.adherencePct() / 100f
     val animatedPct by animateFloatAsState(pct.coerceIn(0f, 1f), tween(300), label = "adherence")
@@ -634,7 +613,7 @@ fun StatsScreen() {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Stat("Interruptions", "$early", Modifier.weight(1f))
-                Stat("Apps blocked", "$blocks", Modifier.weight(1f))
+                Stat("App opens", "$opens", Modifier.weight(1f))
             }
         }
         item {
@@ -653,7 +632,7 @@ fun StatsScreen() {
         item { HeatmapCard(heatRows) }
         item { InterruptionTagsCard(tagCounts) }
         item { UsageCard() }
-        item { BlockedCard(top) }
+        item { OpenedAppsCard(top) }
         item { Text("Recent sessions", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
         items(sessions.take(10), key = { it.id }) { s ->
             val f = java.text.SimpleDateFormat("EEE d MMM, hh:mm a", java.util.Locale.getDefault())
@@ -766,11 +745,11 @@ fun UsageCard() {
 }
 
 @Composable
-fun BlockedCard(top: List<PkgCount>) {
+fun OpenedAppsCard(top: List<PkgCount>) {
     val ctx = LocalContext.current
     if (top.isEmpty()) return
     Tile {
-        Text("Most blocked attempts", color = C.muted, fontSize = 13.sp)
+        Text("Most opened apps", color = C.muted, fontSize = 13.sp)
         top.forEach {
             Row(Modifier.padding(top = 10.dp)) {
                 Text(labelOf(ctx, it.pkg), color = C.text, modifier = Modifier.weight(1f), maxLines = 1)

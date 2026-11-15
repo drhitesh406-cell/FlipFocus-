@@ -36,7 +36,6 @@ private fun fmt12(m: Int): String {
 @Composable
 fun TemplatesScreen(
     minutes: Int,
-    blocked: Set<String>,
     utilities: Set<String>,
     onStart: (TemplateEntity) -> Unit,
     onClose: () -> Unit,
@@ -54,12 +53,12 @@ fun TemplatesScreen(
     ) {
         Title("Templates")
         Text(
-            "Quick-start a session from Focus. Built-in presets keep your current blocked and utility apps; custom templates restore the saved setup.",
+            "Quick-start a session from Focus. Built-in presets keep your current utility apps; custom templates restore the saved setup.",
             color = C.muted, fontSize = 14.sp,
         )
         Tile {
             Text("Save current setup", color = C.text, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-            Text("$minutes min · ${blocked.size} blocked · ${utilities.size} utility apps", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+            Text("$minutes min · ${utilities.size} utility apps", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
             OutlinedTextField(
                 name, { name = it.take(30) }, label = { Text("Template name") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -70,7 +69,7 @@ fun TemplatesScreen(
                     dao.upsertTemplate(
                         TemplateEntity(
                             name = n, minutes = minutes,
-                            apps = blocked.joinToString(","), utilities = utilities.joinToString(","),
+                            utilities = utilities.joinToString(","),
                         ),
                     )
                     name = ""
@@ -88,13 +87,12 @@ fun TemplatesScreen(
 
 @Composable
 private fun TemplateRow(t: TemplateEntity, onStart: (TemplateEntity) -> Unit, onDelete: (() -> Unit)? = null) {
-    val blocked = t.apps.split(",").count { it.isNotBlank() }
     val utils = t.utilities.split(",").count { it.isNotBlank() }
     Tile {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(t.name, color = C.text, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                Text("${t.minutes} min · $blocked blocked · $utils utility", color = C.muted, fontSize = 12.sp)
+                Text("${t.minutes} min · $utils utility", color = C.muted, fontSize = 12.sp)
             }
             TextButton(onClick = { onStart(t) }) { Text("Start", color = C.accent) }
             if (onDelete != null) TextButton(onClick = onDelete) { Text("Delete", color = C.bad) }
