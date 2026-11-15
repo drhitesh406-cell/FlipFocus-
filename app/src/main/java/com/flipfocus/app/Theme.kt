@@ -62,6 +62,6 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(AColor.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(AColor.TRANSPARENT),
         )
-        setContent { AppTheme { App() } }
+        setContent { AppTheme { App(intent.getIntExtra("tab", 0).coerceIn(0, 2)) } }
     }
 }

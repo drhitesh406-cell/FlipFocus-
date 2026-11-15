@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="true" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
@@ -32,9 +33,10 @@
         </activity>
         <activity android:name=".BlockActivity" android:exported="false" android:launchMode="singleTask"
             android:taskAffinity="" android:excludeFromRecents="true" />
-        <service android:name=".FocusService" android:exported="false" android:foregroundServiceType="specialUse">
+        <service android:name=".FocusService" android:exported="false" android:stopWithTask="false"
+            android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Face-down focus session: monitors accelerometer and proximity sensors and vibrates when the phone is picked up" />
+                android:value="Face-down focus sessions: monitors orientation and vibrates when the phone is picked up, including alarm-clock scheduled sessions that run while the app is closed or the phone is locked; selected utility apps pause vibration" />
         </service>
         <service android:name=".BlockerService" android:exported="true"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
