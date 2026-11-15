@@ -48,7 +48,6 @@ class FocusService : Service(), SensorEventListener {
     private var telReg = false
     private var finished = false
     private var wl: PowerManager.WakeLock? = null
-    private var wl: PowerManager.WakeLock? = null
 
     private var zf = 0f
     private var near = true // stays true if the device has no proximity sensor
@@ -103,8 +102,6 @@ class FocusService : Service(), SensorEventListener {
         FocusState.sessionId = sessionId
         FocusState.totalMs.value = plannedMs
 
-        wl = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "flipfocus:session")
-            .apply { acquire(plannedMs + 60_000) } // keep CPU running while the screen is off
         wl = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "flipfocus:session")
             .apply { acquire(plannedMs + 60_000) } // keep CPU running while the screen is off
         sm = getSystemService(SensorManager::class.java)
