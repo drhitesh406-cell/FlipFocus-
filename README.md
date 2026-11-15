@@ -9,9 +9,10 @@ Offline Android 16 (API 36) focus app: face-down sensing, immediate vibration mo
 Or open in Android Studio (JDK 17) and Run.
 
 ## First-run setup on device
-Allow notifications and phone state when asked. In Schedules, allow exact alarms, enable the accessibility service, and use the one-tap battery-optimization exemption. In Focus, select up to **10 utility apps** and optional blocked apps. In Analytics, usage access is optional but improves utility-app detection while locked.
+Allow notifications and phone state when asked. In Schedules, allow exact alarms, grant usage access (needed to see which app is open), and use the one-tap battery-optimization exemption. In Focus, select up to **10 utility apps**.
 
 ## Behavior
+- During a session, opening any app other than FlipFocus or a utility app (or leaving to the home screen) vibrates once after about 2 s, at most once every 3 s. Nothing vibrates for this while the screen is off or the phone is locked.
 - Monitoring starts immediately; no initial face-down flip is needed.
 - Schedules use Android alarm-clock triggers, so a session can start and vibrate while FlipFocus is closed and the phone is locked.
 - Schedule times use a 12-hour clock dial. Overlapping enabled schedules are blocked, and the currently running schedule cannot be edited.

@@ -17,7 +17,7 @@ import android.telephony.TelephonyManager
 import kotlinx.coroutines.*
 
 /**
- * Foreground service that watches orientation and foreground utility apps. Monitoring starts
+ * Foreground service that watches orientation and the foreground app (utility apps pause vibration; other apps buzz). Monitoring starts
  * immediately: no initial face-down flip is needed. Alarm-clock schedules can start this service
  * even when the app UI is closed and the phone is locked.
  */
@@ -28,7 +28,6 @@ class FocusService : Service(), SensorEventListener {
         const val ACTION_SKIP_BREAK = "com.flipfocus.app.SKIP_BREAK"
         const val ACTION_SCHEDULED_START = "com.flipfocus.app.SCHEDULED_START"
         const val EXTRA_MIN = "min"
-        const val EXTRA_APPS = "apps"
         const val EXTRA_SCHEDULED = "scheduled"
         const val EXTRA_SCHEDULE_ID = "scheduleId"
         private const val CH = "focus"
@@ -40,17 +39,17 @@ class FocusService : Service(), SensorEventListener {
         private const val SENSOR_WARMUP_MS = 1_000L
         private const val BREAK_MS = 300_000L
         private const val DOWN_Z = -6.5f
+        private const val APP_GRACE_MS = 2_000L
+        private const val APP_COOLDOWN_MS = 3_000L
 
         fun start(
             ctx: Context,
             minutes: Int,
-            apps: Set<String> = emptySet(),
             scheduled: Boolean = false,
             scheduleId: Int = 0,
         ) {
             val i = Intent(ctx, FocusService::class.java)
                 .putExtra(EXTRA_MIN, minutes)
-                .putStringArrayListExtra(EXTRA_APPS, ArrayList(apps))
                 .putExtra(EXTRA_SCHEDULED, scheduled)
                 .putExtra(EXTRA_SCHEDULE_ID, scheduleId)
             try { ctx.startForegroundService(i) } catch (_: Exception) { /* background start refused */ }
@@ -91,6 +90,13 @@ class FocusService : Service(), SensorEventListener {
     private var upSince = 0L
     private var failSince = 0L
     private var lastUsagePoll = 0L
+    private var kg: KeyguardManager? = null
+    private var homePkgs = emptySet<String>()
+    private var curPkg: String? = null
+    private var prevPkg: String? = null
+    private var curSince = 0L
+    private var curBuzzed = false
+    private var lastAppBuzz = 0L
 
     private var sessionId = 0L
     private var startWall = 0L
@@ -153,7 +159,6 @@ class FocusService : Service(), SensorEventListener {
         FocusState.failed.value = false
         FocusState.armed.value = true
         FocusState.phase.value = Phase.FOCUSED
-        FocusState.blockedApps = i?.getStringArrayListExtra(EXTRA_APPS)?.toSet() ?: emptySet()
         FocusState.utilityApps.value = Prefs.utility(this)
         FocusState.setUtility(null)
 
@@ -183,6 +188,11 @@ class FocusService : Service(), SensorEventListener {
         vib = getSystemService(VibratorManager::class.java).defaultVibrator
         tm = getSystemService(TelephonyManager::class.java)
         usm = getSystemService(UsageStatsManager::class.java)
+        kg = getSystemService(KeyguardManager::class.java)
+        homePkgs = packageManager.queryIntentActivities(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+            PackageManager.ResolveInfoFlags.of(0L),
+        ).map { it.activityInfo.packageName }.toSet()
         sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
             sm.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL); sensorsRegistered = true
         }
@@ -205,7 +215,7 @@ class FocusService : Service(), SensorEventListener {
             if (stopping) break
             if (now >= end) { sessionCompleted = true; break }
 
-            pollUtility(now)
+            pollForeground(now)
             if (!power.isInteractive) FocusState.setUtility(null)
             val util = FocusState.utilityActive
 
@@ -350,24 +360,53 @@ class FocusService : Service(), SensorEventListener {
     override fun onAccuracyChanged(s: Sensor?, a: Int) {}
 
     @Suppress("DEPRECATION")
-    private fun pollUtility(nowElapsed: Long) {
+    private fun pollForeground(nowElapsed: Long) {
         if (!hasUsageAccess() || nowElapsed - lastUsagePoll < 1_000L) return
         lastUsagePoll = nowElapsed
         val manager = usm ?: return
         val until = System.currentTimeMillis()
         val events = try { manager.queryEvents(until - 10_000L, until) } catch (_: Exception) { return }
         var fg: String? = null
+        var fgTs = 0L
         val event = UsageEvents.Event()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
-                event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) fg = event.packageName
+                event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) { fg = event.packageName; fgTs = event.timeStamp }
         }
-        val pkg = fg ?: return
         val apps = FocusState.utilityApps.value
-        if (pkg in apps) FocusState.setUtility(pkg)
-        else if (pkg == packageName || FocusState.activeUtility.value != null) FocusState.setUtility(null)
+        fg?.let { pkg ->
+            if (pkg in apps) FocusState.setUtility(pkg)
+            else if (pkg == packageName || FocusState.activeUtility.value != null) FocusState.setUtility(null)
+            if (pkg != curPkg) { prevPkg = curPkg; curPkg = pkg; curSince = fgTs; curBuzzed = false }
+        }
+        checkAppSwitch(apps, nowElapsed)
     }
+
+    /** One short buzz when a non-utility app (or the home screen) stays in front for 2 s; never while locked. */
+    private fun checkAppSwitch(apps: Set<String>, nowElapsed: Long) {
+        val pkg = curPkg ?: return
+        if (curBuzzed) return
+        if (!power.isInteractive || kg?.isKeyguardLocked == true || paused || violating) { curBuzzed = true; return }
+        if (pkg == packageName || pkg in apps || isSystemChrome(pkg)) return
+        val prev = prevPkg
+        if (pkg in homePkgs && prev != null && prev in apps) { curBuzzed = true; return }
+        if (System.currentTimeMillis() - curSince < APP_GRACE_MS) return
+        if (nowElapsed - lastAppBuzz < APP_COOLDOWN_MS) return
+        curBuzzed = true
+        lastAppBuzz = nowElapsed
+        buzz(VibrationEffect.createOneShot(600, VibrationEffect.DEFAULT_AMPLITUDE))
+        val sid = sessionId
+        val ts = System.currentTimeMillis()
+        val app = applicationContext
+        CoroutineScope(Dispatchers.IO).launch {
+            Db.get(app).dao().insertEvent(EventEntity(sessionId = sid, type = "APP_OPEN", ts = ts, pkg = pkg))
+        }
+    }
+
+    private fun isSystemChrome(pkg: String): Boolean =
+        pkg == "com.android.systemui" || pkg == "android" || pkg.contains("inputmethod", true) ||
+            pkg.contains("keyboard", true) || pkg.endsWith(".ime", true)
 
     private suspend fun logPickup() {
         val sid = sessionId

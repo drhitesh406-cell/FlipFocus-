@@ -39,7 +39,7 @@ data class SessionEntity(
 data class EventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val sessionId: Long,
-    val type: String, // PICKUP, CALL_BYPASS, BLOCK, EARLY_END, FAILED
+    val type: String, // PICKUP, CALL_BYPASS, APP_OPEN, EARLY_END, FAILED
     val ts: Long,
     val pkg: String = "",
     val tag: String = "", // interruption reason, or "Skipped"
@@ -50,7 +50,7 @@ data class TemplateEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val name: String,
     val minutes: Int,
-    val apps: String = "",       // comma-separated blocked packages
+    val apps: String = "",       // legacy, unused (formerly blocked packages)
     val utilities: String = "",  // comma-separated utility packages
 )
 
@@ -73,7 +73,7 @@ data class ScheduleEntity(
     val startMin: Int,
     val endMin: Int,
     val enabled: Boolean = true,
-    val apps: String = "", // comma-separated package names blocked by this schedule
+    val apps: String = "", // legacy, unused (formerly blocked packages)
 )
 
 @Dao
@@ -83,7 +83,7 @@ interface FocusDao {
     @Insert suspend fun insertEvent(e: EventEntity): Long
     @Query("SELECT * FROM sessions WHERE endMs > 0 ORDER BY startMs DESC") fun sessions(): Flow<List<SessionEntity>>
     @Query("SELECT COUNT(*) FROM events WHERE type = :t") fun count(t: String): Flow<Int>
-    @Query("SELECT pkg, COUNT(*) AS n FROM events WHERE type = 'BLOCK' GROUP BY pkg ORDER BY n DESC LIMIT 8") fun topBlocked(): Flow<List<PkgCount>>
+    @Query("SELECT pkg, COUNT(*) AS n FROM events WHERE type = 'APP_OPEN' GROUP BY pkg ORDER BY n DESC LIMIT 8") fun topOpened(): Flow<List<PkgCount>>
     @Query("SELECT tag AS tag, COUNT(*) AS n FROM events WHERE type = 'PICKUP' AND tag != '' AND tag != 'Skipped' GROUP BY tag ORDER BY n DESC LIMIT 4") fun tagCounts(): Flow<List<TagCount>>
     @Query("SELECT * FROM events WHERE type = 'PICKUP' AND tag = '' ORDER BY ts") suspend fun untaggedPickups(): List<EventEntity>
     @Query("UPDATE events SET tag = :tag WHERE id = :id") suspend fun tagEvent(id: Long, tag: String)
@@ -202,7 +202,7 @@ fun List<SessionEntity>.heatmapRows(): List<HeatRow> {
 
 enum class Phase { IDLE, ARMING, FOCUSED, VIOLATION, PAUSED_CALL, UTILITY, BREAK }
 
-/** In-process live state shared by FocusService, the UI and BlockerService. */
+/** In-process live state shared by FocusService and the UI. */
 object FocusState {
     val phase = MutableStateFlow(Phase.IDLE)
     val remainingMs = MutableStateFlow(0L)
@@ -215,7 +215,6 @@ object FocusState {
     val pendingTags = MutableStateFlow<List<PickupTag>>(emptyList())
     @Volatile var utilityActive = false
     @Volatile var sessionId = 0L
-    @Volatile var blockedApps: Set<String> = emptySet()
     val z = MutableStateFlow<Float?>(null)
     val near = MutableStateFlow<Boolean?>(null)
     val armed = MutableStateFlow(false)
@@ -236,7 +235,6 @@ object FocusState {
         runningScheduleId.value = 0
         setUtility(null)
         sessionId = 0L
-        blockedApps = emptySet()
         z.value = null
         near.value = null
         armed.value = false
@@ -247,10 +245,8 @@ object FocusState {
 
 object Prefs {
     private fun sp(c: Context) = c.getSharedPreferences("ff", Context.MODE_PRIVATE)
-    fun blocked(c: Context): Set<String> = sp(c).getStringSet("blocked", emptySet()) ?: emptySet()
     fun utility(c: Context): Set<String> = sp(c).getStringSet("utility", emptySet()) ?: emptySet()
     fun setUtility(c: Context, s: Set<String>) = sp(c).edit().putStringSet("utility", HashSet(s)).apply()
-    fun setBlocked(c: Context, s: Set<String>) = sp(c).edit().putStringSet("blocked", HashSet(s)).apply()
 }
 
 fun Context.hasUsageAccess(): Boolean = getSystemService(AppOpsManager::class.java)
