@@ -84,17 +84,21 @@ class BlockerService : AccessibilityService() {
     override fun onAccessibilityEvent(e: AccessibilityEvent) {
         if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val ph = FocusState.phase.value
-        if (ph == Phase.IDLE || ph == Phase.PAUSED_CALL) return
+        if (ph == Phase.IDLE) return
         val pkg = e.packageName?.toString() ?: return
-        if (pkg == packageName || pkg !in FocusState.blockedApps) return
-        performGlobalAction(GLOBAL_ACTION_HOME)
+        if (pkg == packageName) { FocusState.utilityActive = false; return }
+        if (pkg in FocusState.utilityApps) { FocusState.utilityActive = true; return }
+        if (packageManager.getLaunchIntentForPackage(pkg) == null) return // system UI, keyboards
+        FocusState.utilityActive = false
+        if (ph == Phase.PAUSED_CALL || pkg !in FocusState.blockedApps) return
+        startActivity(Intent(this, BlockActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("pkg", pkg))
         val now = System.currentTimeMillis()
         if (now - lastLog > 2_000) {
             lastLog = now
             val sid = FocusState.sessionId
             val app = applicationContext
             CoroutineScope(Dispatchers.IO).launch {
-                Db.get(app).dao().insertEvent(EventEntity(sessionId = sid, type = "BLOCK", ts = now))
+                Db.get(app).dao().insertEvent(EventEntity(sessionId = sid, type = "BLOCK", ts = now, pkg = pkg))
             }
         }
     }

@@ -47,10 +47,13 @@ class FocusService : Service(), SensorEventListener {
     private lateinit var tm: TelephonyManager
     private var telReg = false
     private var finished = false
+    private var wl: PowerManager.WakeLock? = null
+    private var wl: PowerManager.WakeLock? = null
 
     private var zf = 0f
     private var near = true // stays true if the device has no proximity sensor
     private var paused = false
+    private var suspended = false
     private var armed = false
     private var violating = false
     private var downSince = 0L
@@ -86,6 +89,7 @@ class FocusService : Service(), SensorEventListener {
         if (job != null) return START_NOT_STICKY
         startForeground(NID, notif(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         FocusState.blockedApps = i?.getStringArrayListExtra(EXTRA_APPS)?.toSet() ?: emptySet()
+        FocusState.utilityApps = Prefs.utility(this); FocusState.utilityActive = false
         val mins = i?.getIntExtra(EXTRA_MIN, 25) ?: 25
         job = scope.launch { runSession(mins * 60_000L) }
         return START_NOT_STICKY
@@ -99,6 +103,10 @@ class FocusService : Service(), SensorEventListener {
         FocusState.sessionId = sessionId
         FocusState.totalMs.value = plannedMs
 
+        wl = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "flipfocus:session")
+            .apply { acquire(plannedMs + 60_000) } // keep CPU running while the screen is off
+        wl = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "flipfocus:session")
+            .apply { acquire(plannedMs + 60_000) } // keep CPU running while the screen is off
         sm = getSystemService(SensorManager::class.java)
         vib = getSystemService(VibratorManager::class.java).defaultVibrator
         tm = getSystemService(TelephonyManager::class.java)
@@ -116,16 +124,21 @@ class FocusService : Service(), SensorEventListener {
             val now = SystemClock.elapsedRealtime()
             val dt = now - last; last = now
             if (now >= end) break
-            if (paused) {
-                FocusState.phase.value = Phase.PAUSED_CALL
+            val util = FocusState.utilityActive
+            if (paused || util) {
+                if (!suspended) { suspended = true; stopVib() }
+                FocusState.phase.value = if (paused) Phase.PAUSED_CALL else Phase.UTILITY
             } else {
-                val down = zf < DOWN_Z && near
+                if (suspended) { // leaving a utility app: vibrate again right away if the phone is not face-down
+                    suspended = false; violating = false; downSince = 0; upSince = now - GRACE_MS
+                }
+                val down = zf < (if (near) DOWN_Z else -8.0f) // proximity far => require a flatter phone
                 if (down) { if (downSince == 0L) downSince = now; upSince = 0 }
                 else { downSince = 0; if (upSince == 0L) upSince = now }
                 when {
                     !armed -> {
                         FocusState.phase.value = Phase.ARMING
-                        if (down && now - downSince >= ARM_MS) armed = true
+                        if (down && now - downSince >= ARM_MS) { armed = true; pulse() }
                     }
                     violating -> {
                         faceUp += dt
@@ -152,7 +165,7 @@ class FocusService : Service(), SensorEventListener {
         if (finished) return
         finished = true
         job?.cancel()
-        stopVib()
+        stopVib(); wl?.let { if (it.isHeld) it.release() }
         if (::sm.isInitialized) sm.unregisterListener(this)
         if (telReg) { tm.unregisterTelephonyCallback(callCb); telReg = false }
         val sid = sessionId
@@ -174,7 +187,7 @@ class FocusService : Service(), SensorEventListener {
     override fun onDestroy() {
         scope.cancel()
         if (!finished) { // killed unexpectedly: release hardware
-            stopVib()
+            stopVib(); wl?.let { if (it.isHeld) it.release() }
             if (::sm.isInitialized) sm.unregisterListener(this)
             if (telReg) tm.unregisterTelephonyCallback(callCb)
             FocusState.reset()
@@ -194,6 +207,10 @@ class FocusService : Service(), SensorEventListener {
         val eff = VibrationEffect.createWaveform(longArrayOf(0, 500, 300), 0) // repeat from index 0
         val attrs = VibrationAttributes.Builder().setUsage(VibrationAttributes.USAGE_ALARM).build()
         vib.vibrate(eff, attrs)
+    }
+    private fun pulse() { // short buzz = "armed"; also confirms vibration works
+        val a = VibrationAttributes.Builder().setUsage(VibrationAttributes.USAGE_ALARM).build()
+        vib.vibrate(VibrationEffect.createOneShot(120, 255), a)
     }
     private fun stopVib() { if (::vib.isInitialized) vib.cancel() }
 
@@ -218,7 +235,6 @@ class FocusService : Service(), SensorEventListener {
             .setContentText("Keep your phone face-down")
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "End", stop).build())
             .build()
     }
 }

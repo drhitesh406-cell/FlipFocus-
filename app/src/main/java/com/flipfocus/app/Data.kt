@@ -23,7 +23,10 @@ data class EventEntity(
     val sessionId: Long,
     val type: String, // PICKUP, CALL_BYPASS, BLOCK, EARLY_END
     val ts: Long,
+    val pkg: String = "",
 )
+
+data class PkgCount(val pkg: String, val n: Int)
 
 @Entity(tableName = "schedules")
 data class ScheduleEntity(
@@ -43,6 +46,7 @@ interface FocusDao {
     @Insert suspend fun insertEvent(e: EventEntity)
     @Query("SELECT * FROM sessions WHERE endMs > 0 ORDER BY startMs DESC") fun sessions(): Flow<List<SessionEntity>>
     @Query("SELECT COUNT(*) FROM events WHERE type = :t") fun count(t: String): Flow<Int>
+    @Query("SELECT pkg, COUNT(*) AS n FROM events WHERE type = 'BLOCK' GROUP BY pkg ORDER BY n DESC LIMIT 8") fun topBlocked(): Flow<List<PkgCount>>
     @Query("SELECT * FROM schedules ORDER BY startMin") fun schedules(): Flow<List<ScheduleEntity>>
     @Query("SELECT * FROM schedules") suspend fun schedulesNow(): List<ScheduleEntity>
     @Query("SELECT * FROM schedules WHERE id = :id") suspend fun schedule(id: Int): ScheduleEntity?
@@ -51,7 +55,7 @@ interface FocusDao {
     @Query("UPDATE schedules SET enabled = :e WHERE id = :id") suspend fun setEnabled(id: Int, e: Boolean)
 }
 
-@Database(entities = [SessionEntity::class, EventEntity::class, ScheduleEntity::class], version = 2, exportSchema = false)
+@Database(entities = [SessionEntity::class, EventEntity::class, ScheduleEntity::class], version = 3, exportSchema = false)
 abstract class Db : RoomDatabase() {
     abstract fun dao(): FocusDao
 
@@ -80,7 +84,7 @@ fun List<SessionEntity>.adherencePct(): Int {
     return Math.round(100f * (1f - sumOf { it.violatedMs() }.toFloat() / planned))
 }
 
-enum class Phase { IDLE, ARMING, FOCUSED, VIOLATION, PAUSED_CALL }
+enum class Phase { IDLE, ARMING, FOCUSED, VIOLATION, PAUSED_CALL, UTILITY }
 
 /** In-process live state shared by FocusService, the UI and BlockerService. */
 object FocusState {
@@ -89,11 +93,15 @@ object FocusState {
     val totalMs = MutableStateFlow(0L)
     @Volatile var sessionId = 0L
     @Volatile var blockedApps: Set<String> = emptySet()
-    fun reset() { phase.value = Phase.IDLE; remainingMs.value = 0; sessionId = 0; blockedApps = emptySet() }
+    @Volatile var utilityApps: Set<String> = emptySet()
+    @Volatile var utilityActive = false
+    fun reset() { phase.value = Phase.IDLE; remainingMs.value = 0; sessionId = 0; blockedApps = emptySet(); utilityActive = false }
 }
 
 object Prefs {
     private fun sp(c: Context) = c.getSharedPreferences("ff", Context.MODE_PRIVATE)
     fun blocked(c: Context): Set<String> = sp(c).getStringSet("blocked", emptySet()) ?: emptySet()
+    fun utility(c: Context): Set<String> = sp(c).getStringSet("utility", emptySet()) ?: emptySet()
+    fun setUtility(c: Context, s: Set<String>) = sp(c).edit().putStringSet("utility", HashSet(s)).apply()
     fun setBlocked(c: Context, s: Set<String>) = sp(c).edit().putStringSet("blocked", HashSet(s)).apply()
 }
