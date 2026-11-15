@@ -41,20 +41,33 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Calendar
-import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
-import android.os.Process
+import android.os.PowerManager
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import kotlinx.coroutines.delay
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.Brush
 
 private val DAYS = listOf("M", "T", "W", "T", "F", "S", "S")
-private fun hhmm(m: Int) = "%02d:%02d".format(m / 60, m % 60)
+private fun hhmm(m: Int): String {
+    val h = m / 60
+    val ampm = if (h < 12) "AM" else "PM"
+    val h12 = h % 12
+    return "%d:%02d %s".format(if (h12 == 0) 12 else h12, m % 60, ampm)
+}
 
 @Composable
 fun Tile(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) = Column(
-    modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(C.surface)
+    modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
+        .background(Brush.linearGradient(listOf(C.surface, Color(0xFF090B0E))))
         .border(1.dp, C.line, RoundedCornerShape(20.dp)).padding(18.dp),
     content = content,
 )
@@ -70,9 +83,15 @@ fun Pill(label: String, filled: Boolean, onClick: () -> Unit, modifier: Modifier
 ) { Text(label, color = if (filled) Color.Black else C.text, fontWeight = FontWeight.SemiBold, fontSize = 16.sp) }
 
 @Composable
-fun App() {
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    val labels = listOf("Focus", "Schedules", "Insights")
+fun App(initialTab: Int = 0) {
+    val ctx = LocalContext.current
+    LaunchedEffect(Unit) {
+        FocusState.utilityApps.value = Prefs.utility(ctx)
+        val rows = withContext(Dispatchers.IO) { Db.get(ctx).dao().untaggedPickups() }
+        FocusState.pendingTags.value = rows.map { PickupTag(it.id, it.ts) }
+    }
+    var tab by rememberSaveable { mutableIntStateOf(initialTab.coerceIn(0, 2)) }
+    val labels = listOf("Focus", "Schedules", "Analytics")
     Scaffold(
         containerColor = C.bg,
         bottomBar = {
@@ -80,7 +99,7 @@ fun App() {
                 labels.forEachIndexed { i, l ->
                     NavigationBarItem(
                         selected = tab == i, onClick = { tab = i },
-                        icon = { Box(Modifier.size(6.dp).clip(CircleShape).background(if (tab == i) C.text else Color.Transparent)) },
+                        icon = { TabIcon(i, tab == i) },
                         label = { Text(l, fontSize = 12.sp) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedTextColor = C.text, unselectedTextColor = C.muted, indicatorColor = Color.Transparent,
@@ -91,7 +110,93 @@ fun App() {
         },
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
-            when (tab) { 0 -> FocusScreen(); 1 -> SchedulesScreen(); else -> StatsScreen() }
+            Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(C.accent.copy(alpha = 0.055f), Color.Transparent))))
+            Crossfade(targetState = tab, animationSpec = tween(180), label = "tab") { t ->
+                when (t) { 0 -> FocusScreen(); 1 -> SchedulesScreen(); else -> StatsScreen() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabIcon(index: Int, active: Boolean) {
+    val tint by animateColorAsState(if (active) C.text else C.muted, tween(150), label = "tabTint")
+    Canvas(Modifier.size(24.dp)) {
+        val s = size.minDimension
+        when (index) {
+            0 -> { // focus timer
+                drawCircle(tint, s * 0.40f, Offset(s / 2, s / 2), style = Stroke(s * 0.07f))
+                drawLine(tint, Offset(s / 2, s / 2), Offset(s / 2, s * 0.27f), s * 0.07f, cap = StrokeCap.Round)
+                drawLine(tint, Offset(s / 2, s / 2), Offset(s * 0.68f, s * 0.57f), s * 0.07f, cap = StrokeCap.Round)
+                drawLine(tint, Offset(s / 2, s * 0.13f), Offset(s / 2, s * 0.20f), s * 0.07f, cap = StrokeCap.Round)
+            }
+            1 -> { // calendar
+                val left = s * 0.12f; val top = s * 0.18f; val w = s * 0.76f; val h = s * 0.70f
+                drawRect(tint, Offset(left, top), Size(w, h), style = Stroke(s * 0.06f))
+                drawLine(tint, Offset(left, top + s * 0.20f), Offset(left + w, top + s * 0.20f), s * 0.06f)
+                drawLine(tint, Offset(left + s * 0.22f, top), Offset(left + s * 0.22f, top - s * 0.08f), s * 0.07f, cap = StrokeCap.Round)
+                drawLine(tint, Offset(left + w - s * 0.22f, top), Offset(left + w - s * 0.22f, top - s * 0.08f), s * 0.07f, cap = StrokeCap.Round)
+                drawCircle(tint, s * 0.035f, Offset(left + s * 0.28f, top + s * 0.40f))
+                drawCircle(tint, s * 0.035f, Offset(left + s * 0.52f, top + s * 0.40f))
+                drawCircle(tint, s * 0.035f, Offset(left + s * 0.28f, top + s * 0.60f))
+            }
+            else -> { // analytics bars
+                val base = s * 0.82f
+                drawLine(tint, Offset(s * 0.12f, s * 0.16f), Offset(s * 0.12f, base), s * 0.06f, cap = StrokeCap.Round)
+                drawLine(tint, Offset(s * 0.12f, base), Offset(s * 0.88f, base), s * 0.06f, cap = StrokeCap.Round)
+                drawRect(tint, Offset(s * 0.25f, s * 0.55f), Size(s * 0.13f, base - s * 0.55f))
+                drawRect(tint, Offset(s * 0.48f, s * 0.36f), Size(s * 0.13f, base - s * 0.36f))
+                drawRect(tint, Offset(s * 0.71f, s * 0.23f), Size(s * 0.13f, base - s * 0.23f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun UtilityStrip(apps: Set<String>, active: String?, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    val labels by produceState(emptyMap<String, String>(), apps) {
+        value = withContext(Dispatchers.IO) { apps.associateWith { labelOf(ctx, it) } }
+    }
+    Column(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(C.surface)
+            .border(1.dp, C.line, RoundedCornerShape(16.dp)).padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Utility apps", color = C.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.weight(1f))
+            Text(if (active != null) "Vibration paused" else "Resumes within 3s", color = C.muted, fontSize = 12.sp)
+        }
+        Spacer(Modifier.height(8.dp))
+        if (apps.isEmpty()) {
+            Text("None selected", color = C.muted, fontSize = 13.sp)
+        } else {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                apps.sortedBy { (labels[it] ?: it).lowercase() }.forEach { pkg ->
+                    val label = labels[pkg] ?: pkg
+                    val on = active == pkg
+                    Row(
+                        Modifier.clip(RoundedCornerShape(12.dp))
+                            .background(if (on) C.accent else C.bg)
+                            .border(1.dp, C.line, RoundedCornerShape(12.dp))
+                            .clickable {
+                                try {
+                                    ctx.packageManager.getLaunchIntentForPackage(pkg)?.let {
+                                        ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(24.dp).clip(CircleShape).background(if (on) C.text else C.accent), contentAlignment = Alignment.Center) {
+                            Text(label.firstOrNull()?.uppercaseChar()?.toString() ?: "?", color = C.bg, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text(label, color = if (on) Color.Black else C.text, fontSize = 12.sp, maxLines = 1, modifier = Modifier.widthIn(max = 100.dp))
+                    }
+                }
+            }
         }
     }
 }
@@ -102,73 +207,153 @@ private val PRESETS = listOf(15, 25, 45, 60, 90)
 @Composable
 fun FocusScreen() {
     val ctx = LocalContext.current
+    val dao = remember { Db.get(ctx).dao() }
     val phase by FocusState.phase.collectAsState()
     val rem by FocusState.remainingMs.collectAsState()
     val total by FocusState.totalMs.collectAsState()
     val zv by FocusState.z.collectAsState()
     val nr by FocusState.near.collectAsState()
     val ar by FocusState.armed.collectAsState()
+    val scheduled by FocusState.scheduled.collectAsState()
+    val failed by FocusState.failed.collectAsState()
+    val utilityApps by FocusState.utilityApps.collectAsState()
+    val activeUtility by FocusState.activeUtility.collectAsState()
+    val pendingTags by FocusState.pendingTags.collectAsState()
+    val customTemplates by dao.templates().collectAsState(emptyList())
     var mins by rememberSaveable { mutableIntStateOf(25) }
+    var blocked by remember { mutableStateOf(Prefs.blocked(ctx)) }
     var customDialog by remember { mutableStateOf(false) }
     var confirming by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf("") }
+    var showTemplates by remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        FocusService.start(ctx, mins) // proceed even if denied; call bypass needs READ_PHONE_STATE
+        FocusService.start(ctx, mins, blocked)
     }
+
+    fun startWithTemplate(t: TemplateEntity) {
+        mins = t.minutes
+        if (t.apps.isNotBlank() || t.utilities.isNotBlank()) {
+            blocked = t.apps.split(",").filter { it.isNotBlank() }.toSet()
+            Prefs.setBlocked(ctx, blocked)
+            val u = t.utilities.split(",").filter { it.isNotBlank() }.take(MAX_UTILITY_APPS).toSet()
+            Prefs.setUtility(ctx, u)
+            FocusState.utilityApps.value = u
+        }
+        launcher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_PHONE_STATE))
+    }
+
     val active = phase != Phase.IDLE
-    var picking by remember { mutableStateOf(false) }
-    var util by remember { mutableStateOf(Prefs.utility(ctx)) }
-    if (picking) {
-        BackHandler { picking = false }
-        AppPicker(util, { util = it; Prefs.setUtility(ctx, it) }, 5, "Utility apps (max 5)") { picking = false }
+    if (showTemplates) {
+        BackHandler { showTemplates = false }
+        TemplatesScreen(mins, blocked, utilityApps, { t ->
+            showTemplates = false
+            startWithTemplate(t)
+        }, { showTemplates = false })
         return
     }
-    if (active && confirming) { RethinkScreen({ confirming = false }) { confirming = false; FocusService.stop(ctx) }; return }
+    if (picking == "utility") {
+        BackHandler { picking = "" }
+        AppPicker(utilityApps, { set ->
+            Prefs.setUtility(ctx, set)
+            FocusState.utilityApps.value = set
+        }, MAX_UTILITY_APPS, "Utility apps (max $MAX_UTILITY_APPS)") { picking = "" }
+        return
+    }
+    if (picking == "blocked") {
+        BackHandler { picking = "" }
+        AppPicker(blocked, { set -> blocked = set; Prefs.setBlocked(ctx, set) }, Int.MAX_VALUE, "Blocked apps") { picking = "" }
+        return
+    }
+    if (!active && pendingTags.isNotEmpty()) {
+        TaggingScreen(pendingTags) { FocusState.clearPendingTags() }
+        return
+    }
+    if (active && confirming && phase != Phase.BREAK) {
+        RethinkScreen({ confirming = false }) { confirming = false; FocusService.stop(ctx) }
+        return
+    }
+
     val secs = ((if (active) rem else mins * 60_000L) / 1000).coerceAtLeast(0)
     val progress = if (active && total > 0) rem.toFloat() / total else 1f
-    val (status, color) = when (phase) {
+    val animatedProgress by animateFloatAsState(progress.coerceIn(0f, 1f), tween(250), label = "progress")
+    val (baseStatus, baseColor) = when (phase) {
         Phase.IDLE -> "Ready" to C.muted
         Phase.ARMING -> "Place phone face-down" to C.text
         Phase.FOCUSED -> "Stay focused" to C.accent
         Phase.VIOLATION -> "Put it back face-down" to C.bad
         Phase.PAUSED_CALL -> "Paused for call" to C.muted
         Phase.UTILITY -> "Utility app in use" to C.muted
+        Phase.BREAK -> "Break · vibration paused" to C.accent
     }
+    val status = if (failed) "Failed session · not counted" else baseStatus
+    val color = if (failed) C.bad else baseColor
+    val animatedColor by animateColorAsState(color, tween(200), label = "status")
+    val originLabel = if (scheduled) "scheduled" else "manual"
+
     Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.weight(1f))
         Box(contentAlignment = Alignment.Center) {
-            Canvas(Modifier.size(280.dp)) {
+            val ringSize = if (active) 230.dp else 280.dp
+            if (active) Box(Modifier.size(ringSize + 22.dp).background(Brush.radialGradient(listOf(animatedColor.copy(alpha = 0.10f), Color.Transparent))))
+            Canvas(Modifier.size(ringSize)) {
                 val sw = 6.dp.toPx()
-                val tl = Offset(sw / 2, sw / 2); val sz = Size(size.width - sw, size.height - sw)
+                val tl = Offset(sw / 2, sw / 2); val sz = Size(this.size.width - sw, this.size.height - sw)
                 drawArc(C.line, 0f, 360f, false, tl, sz, style = Stroke(sw))
-                drawArc(color.takeIf { active } ?: C.line, -90f, 360f * progress, false, tl, sz, style = Stroke(sw, cap = StrokeCap.Round))
+                if (active) {
+                    drawArc(animatedColor.copy(alpha = 0.16f), -90f, 360f * animatedProgress, false, tl, sz, style = Stroke(sw * 2.6f, cap = StrokeCap.Round))
+                    drawArc(animatedColor, -90f, 360f * animatedProgress, false, tl, sz, style = Stroke(sw, cap = StrokeCap.Round))
+                } else {
+                    drawArc(C.line, -90f, 360f, false, tl, sz, style = Stroke(sw, cap = StrokeCap.Round))
+                }
             }
             Text("%02d:%02d".format(secs / 60, secs % 60), fontFamily = Mono, fontSize = 60.sp, color = C.text)
         }
         Spacer(Modifier.height(24.dp))
-        Text(status, color = color, fontSize = 18.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
-        if (active) Text("z=${zv?.let { "%.1f".format(it) } ?: "no data"} · prox=${when (nr) { true -> "near"; false -> "far"; null -> "none" }} · armed=$ar",
+        Text(status, color = animatedColor, fontSize = 18.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
+        if (active && phase != Phase.BREAK) Text("$originLabel · z=${zv?.let { "%.1f".format(it) } ?: "no data"} · prox=${when (nr) { true -> "near"; false -> "far"; null -> "none" }} · monitoring=$ar",
             color = C.muted, fontSize = 12.sp, fontFamily = Mono, modifier = Modifier.padding(top = 8.dp))
+        Spacer(Modifier.height(14.dp))
+        AnimatedVisibility(visible = active && phase != Phase.BREAK, enter = fadeIn(), exit = fadeOut()) {
+            UtilityStrip(utilityApps, activeUtility)
+        }
         Spacer(Modifier.weight(1f))
-        if (!active) {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                (PRESETS + 0).forEach { m ->
-                    val custom = m == 0
-                    val sel = if (custom) mins !in PRESETS else m == mins
-                    Box(
-                        Modifier.clip(RoundedCornerShape(14.dp))
-                            .background(if (sel) C.text else C.surface).border(1.dp, C.line, RoundedCornerShape(14.dp))
-                            .clickable { if (custom) customDialog = true else mins = m }.padding(horizontal = 14.dp, vertical = 10.dp),
-                    ) { Text(if (custom) (if (sel) "$mins · Custom" else "Custom") else "$m", color = if (sel) Color.Black else C.text, fontWeight = FontWeight.Medium) }
-                }
+        when {
+            phase == Phase.BREAK -> {
+                Text("Session complete · 5-minute break", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp))
+                Pill("Skip break", false, { FocusService.skipBreak(ctx) }, Modifier.fillMaxWidth())
             }
-            Text("minutes", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp, bottom = 12.dp))
-            Text("Test vibration", color = C.muted, fontSize = 14.sp, modifier = Modifier.clickable { testVibrate(ctx) }.padding(bottom = 8.dp))
-            Text("Utility apps · ${util.size}/5", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { picking = true }.padding(bottom = 16.dp))
-            Pill("Start focus", true, {
-                launcher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_PHONE_STATE))
-            }, Modifier.fillMaxWidth())
-        } else {
-            Pill("End session", false, { confirming = true }, Modifier.fillMaxWidth())
+            !active -> {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (PRESETS + 0).forEach { m ->
+                        val custom = m == 0
+                        val sel = if (custom) mins !in PRESETS else m == mins
+                        Box(
+                            Modifier.clip(RoundedCornerShape(14.dp))
+                                .background(if (sel) C.text else C.surface).border(1.dp, C.line, RoundedCornerShape(14.dp))
+                                .clickable { if (custom) customDialog = true else mins = m }.padding(horizontal = 14.dp, vertical = 10.dp),
+                        ) { Text(if (custom) (if (sel) "$mins · Custom" else "Custom") else "$m", color = if (sel) Color.Black else C.text, fontWeight = FontWeight.Medium) }
+                    }
+                }
+                Text("minutes", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
+                Text("Quick start", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 6.dp))
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (BUILT_IN_TEMPLATES + customTemplates).forEach { t ->
+                        Box(
+                            Modifier.clip(RoundedCornerShape(14.dp)).background(C.surface)
+                                .border(1.dp, C.line, RoundedCornerShape(14.dp))
+                                .clickable { startWithTemplate(t) }.padding(horizontal = 12.dp, vertical = 9.dp),
+                        ) { Text("${t.name} · ${t.minutes}m", color = C.text, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+                    }
+                }
+                Text("Manage templates", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { showTemplates = true }.padding(top = 8.dp, bottom = 8.dp))
+                Text("Test vibration", color = C.muted, fontSize = 14.sp, modifier = Modifier.clickable { testVibrate(ctx) }.padding(bottom = 8.dp))
+                Text("Utility apps · ${utilityApps.size}/$MAX_UTILITY_APPS", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { picking = "utility" }.padding(bottom = 6.dp))
+                Text("Blocked apps · ${blocked.size}", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { picking = "blocked" }.padding(bottom = 16.dp))
+                Pill("Start focus", true, {
+                    launcher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_PHONE_STATE))
+                }, Modifier.fillMaxWidth())
+            }
+            else -> Pill("End session", false, { confirming = true }, Modifier.fillMaxWidth())
         }
     }
     if (customDialog) {
@@ -212,6 +397,7 @@ fun SchedulesScreen() {
     val ctx = LocalContext.current
     val dao = remember { Db.get(ctx).dao() }
     val list by dao.schedules().collectAsState(emptyList())
+    val runningId by FocusState.runningScheduleId.collectAsState()
     val scope = rememberCoroutineScope()
     var exact by remember { mutableStateOf(Scheduler.canExact(ctx)) }
     var a11y by remember { mutableStateOf(false) }
@@ -223,7 +409,11 @@ fun SchedulesScreen() {
     }
     val e = editing
     if (e != null) {
-        ScheduleEditor(e, { editing = null }, onDelete = {
+        if (runningId == e.id) {
+            ScheduleLockedScreen(e) { editing = null }
+            return
+        }
+        ScheduleEditor(e, list, { editing = null }, onDelete = {
             editing = null
             if (e.id != 0) scope.launch { Scheduler.cancel(ctx, e.id); dao.deleteSchedule(e) }
         }) { s ->
@@ -236,27 +426,31 @@ fun SchedulesScreen() {
         item { Title("Schedules") }
         if (!a11y) item {
             Tile {
-                Text("Turn on the accessibility service so blocked apps can be closed during a schedule.", color = C.muted, fontSize = 14.sp)
+                Text("Turn on the accessibility service so utility apps pause vibration and blocked apps are closed during locked schedules.", color = C.muted, fontSize = 14.sp)
                 TextButton(onClick = { ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Open settings", color = C.accent) }
             }
         }
         if (!exact) item {
             Tile {
-                Text("Exact alarms are off, so schedules may start a few minutes late.", color = C.muted, fontSize = 14.sp)
+                Text("Allow exact alarms for the most reliable schedule starts on Android.", color = C.muted, fontSize = 14.sp)
                 TextButton(onClick = {
                     ctx.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${ctx.packageName}")))
                 }) { Text("Allow exact alarms", color = C.accent) }
             }
         }
+        item { BatteryCard() }
         items(list, key = { it.id }) { s ->
             val n = s.apps.split(",").count { it.isNotBlank() }
-            Tile(Modifier.clickable { editing = s }) {
+            val locked = runningId == s.id
+            val conflict = Scheduler.conflict(s, list)
+            Tile(Modifier.clickable(enabled = !locked) { editing = s }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(s.name, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = C.text)
                         Text("${hhmm(s.startMin)} – ${hhmm(s.endMin)}", fontFamily = Mono, color = C.muted, fontSize = 14.sp)
                     }
                     Switch(
+                        enabled = !locked,
                         checked = s.enabled,
                         onCheckedChange = { on -> scope.launch { dao.setEnabled(s.id, on); Scheduler.schedule(ctx, s.copy(enabled = on)) } },
                         colors = SwitchDefaults.colors(checkedTrackColor = C.accent, checkedThumbColor = Color.Black,
@@ -270,6 +464,8 @@ fun SchedulesScreen() {
                     Spacer(Modifier.weight(1f))
                     Text("$n apps", color = C.muted, fontSize = 13.sp)
                 }
+                if (conflict != null) Text("Overlaps ${conflict.name}", color = C.bad, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                if (locked) Text("Running · editing locked", color = C.accent, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
             }
         }
         item {
@@ -282,13 +478,15 @@ fun SchedulesScreen() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScheduleEditor(init: ScheduleEntity, onClose: () -> Unit, onDelete: () -> Unit, onSave: (ScheduleEntity) -> Unit) {
+fun ScheduleEditor(init: ScheduleEntity, all: List<ScheduleEntity>, onClose: () -> Unit, onDelete: () -> Unit, onSave: (ScheduleEntity) -> Unit) {
     var name by remember { mutableStateOf(init.name) }
     var days by remember { mutableIntStateOf(init.days) }
     var apps by remember { mutableStateOf(init.apps.split(",").filter { it.isNotBlank() }.toSet()) }
     var picking by remember { mutableStateOf(false) }
-    val st = rememberTimePickerState(init.startMin / 60, init.startMin % 60, true)
-    val en = rememberTimePickerState(init.endMin / 60, init.endMin % 60, true)
+    var conflictName by remember { mutableStateOf<String?>(null) }
+    val st = rememberTimePickerState(init.startMin / 60, init.startMin % 60, false)
+    val en = rememberTimePickerState(init.endMin / 60, init.endMin % 60, false)
+    LaunchedEffect(name, days, st.hour, st.minute, en.hour, en.minute) { conflictName = null }
     BackHandler { if (picking) picking = false else onClose() }
     if (picking) { AppPicker(apps, { apps = it }) { picking = false }; return }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -304,18 +502,30 @@ fun ScheduleEditor(init: ScheduleEntity, onClose: () -> Unit, onDelete: () -> Un
                 ) { Text(d, color = if (on) Color.Black else C.muted, fontWeight = FontWeight.Medium) }
             }
         }
-        Tile { Text("Start", color = C.muted); TimeInput(st) }
-        Tile { Text("End", color = C.muted); TimeInput(en) }
+        Tile {
+            Text("Start · ${hhmm(st.hour * 60 + st.minute)}", color = C.muted)
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { TimePicker(state = st) }
+        }
+        Tile {
+            Text("End · ${hhmm(en.hour * 60 + en.minute)}", color = C.muted)
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { TimePicker(state = en) }
+        }
         Tile(Modifier.clickable { picking = true }) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Blocked apps", color = C.text, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
                 Text("${apps.size} selected", color = C.muted)
             }
         }
-        Text("During the schedule, keep your phone face-down. Picking it up makes it vibrate until you flip it back.", color = C.muted, fontSize = 13.sp)
+        Text("12-hour clock. Overlapping enabled schedules are blocked. Monitoring starts even when the app is closed or locked.", color = C.muted, fontSize = 13.sp)
+        if (conflictName != null) Text("Overlaps “$conflictName”. Adjust the days or times.", color = C.bad, fontSize = 13.sp)
         Pill("Save", true, {
-            onSave(init.copy(name = name.ifBlank { "Focus" }, days = days, startMin = st.hour * 60 + st.minute,
-                endMin = en.hour * 60 + en.minute, apps = apps.joinToString(",")))
+            val candidate = init.copy(
+                name = name.ifBlank { "Focus" }, days = days,
+                startMin = st.hour * 60 + st.minute, endMin = en.hour * 60 + en.minute,
+                apps = apps.joinToString(","),
+            )
+            val c = Scheduler.conflict(candidate, all)
+            if (c == null) onSave(candidate) else conflictName = c.name
         }, Modifier.fillMaxWidth())
         if (init.id != 0) Pill("Delete", false, onDelete, Modifier.fillMaxWidth())
     }
@@ -361,8 +571,15 @@ fun StatsScreen() {
     val blocks by dao.count("BLOCK").collectAsState(0)
     val early by dao.count("EARLY_END").collectAsState(0)
     val top by dao.topBlocked().collectAsState(emptyList())
+    val tagCounts by dao.tagCounts().collectAsState(emptyList())
     val pct = sessions.adherencePct() / 100f
-    val focusMin = sessions.sumOf { (it.endMs - it.startMs - it.faceUpMs).coerceAtLeast(0) } / 60_000
+    val animatedPct by animateFloatAsState(pct.coerceIn(0f, 1f), tween(300), label = "adherence")
+    val totalMs = sessions.sumOf { it.effectiveMs() }
+    val plannedMin = sessions.filter { !it.failed }.sumOf { it.plannedMs } / 60_000
+    val failedCount = sessions.count { it.failed }
+    val streak = sessions.currentStreak()
+    val goodDays = sessions.last7GoodDays()
+    val heatRows = sessions.heatmapRows()
     val week = remember(sessions) {
         val cal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
@@ -370,14 +587,13 @@ fun StatsScreen() {
         (6 downTo 0).map { i ->
             val d = (cal.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -i) }
             val s0 = d.timeInMillis; val e0 = s0 + 86_400_000L
-            val m = sessions.filter { it.startMs in s0 until e0 }
-                .sumOf { (it.endMs - it.startMs - it.faceUpMs).coerceAtLeast(0) } / 60_000
+            val m = sessions.filter { it.startMs in s0 until e0 }.sumOf { it.effectiveMs() } / 60_000
             "SMTWTFS"[d.get(Calendar.DAY_OF_WEEK) - 1].toString() to m
         }
     }
     val max = (week.maxOfOrNull { it.second } ?: 0L).coerceAtLeast(1L)
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Title("Insights") }
+        item { Title("Analytics") }
         item {
             Tile {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -385,7 +601,8 @@ fun StatsScreen() {
                         val sw = 10.dp.toPx()
                         val tl = Offset(sw / 2, sw / 2); val sz = Size(size.width - sw, size.height - sw)
                         drawArc(C.line, 0f, 360f, false, tl, sz, style = Stroke(sw))
-                        drawArc(C.accent, -90f, 360f * pct, false, tl, sz, style = Stroke(sw, cap = StrokeCap.Round))
+                        drawArc(C.accent.copy(alpha = 0.14f), -90f, 360f * animatedPct, false, tl, sz, style = Stroke(sw * 2.2f, cap = StrokeCap.Round))
+                        drawArc(C.accent, -90f, 360f * animatedPct, false, tl, sz, style = Stroke(sw, cap = StrokeCap.Round))
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("${(pct * 100).toInt()}%", fontFamily = Mono, fontSize = 40.sp, color = C.text)
@@ -394,10 +611,18 @@ fun StatsScreen() {
                 }
             }
         }
+        item { StreakCard(streak, goodDays) }
+        item {
+            Tile {
+                Text("Total time", color = C.muted, fontSize = 13.sp)
+                Text(dur(totalMs), fontFamily = Mono, fontSize = 32.sp, color = C.text, modifier = Modifier.padding(top = 6.dp))
+                Text("${plannedMin / 60}h ${plannedMin % 60}m planned · failed sessions excluded", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Stat("Sessions", "${sessions.size}", Modifier.weight(1f))
-                Stat("Focused", "${focusMin / 60}h ${focusMin % 60}m", Modifier.weight(1f))
+                Stat("Failed", "$failedCount", Modifier.weight(1f))
             }
         }
         item {
@@ -425,17 +650,24 @@ fun StatsScreen() {
                 }
             }
         }
+        item { HeatmapCard(heatRows) }
+        item { InterruptionTagsCard(tagCounts) }
         item { UsageCard() }
         item { BlockedCard(top) }
         item { Text("Recent sessions", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
         items(sessions.take(10), key = { it.id }) { s ->
-            val f = java.text.SimpleDateFormat("EEE d MMM, HH:mm", java.util.Locale.getDefault())
+            val f = java.text.SimpleDateFormat("EEE d MMM, hh:mm a", java.util.Locale.getDefault())
+            val origin = if (s.scheduled) "scheduled" else "manual"
             Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(f.format(java.util.Date(s.startMs)), color = C.text)
-                    Text("${s.plannedMs / 60_000} min · ${s.pickups} pickups", color = C.muted, fontSize = 13.sp)
+                    Text("${s.plannedMs / 60_000} min · $origin · ${s.pickups} pickups", color = C.muted, fontSize = 13.sp)
                 }
-                Text("${(s.adherence() * 100).toInt()}%", fontFamily = Mono, color = if (s.adherence() >= 0.8f) C.accent else C.bad)
+                Text(
+                    if (s.failed) "FAILED" else "${(s.adherence() * 100).toInt()}%",
+                    fontFamily = Mono,
+                    color = if (s.failed || s.adherence() < 0.8f) C.bad else C.accent,
+                )
             }
         }
     }
@@ -453,15 +685,47 @@ private fun labelOf(ctx: android.content.Context, pkg: String) = try {
 
 private fun dur(ms: Long) = "${ms / 3_600_000}h ${ms / 60_000 % 60}m"
 
-private fun hasUsage(ctx: android.content.Context) = ctx.getSystemService(AppOpsManager::class.java)
-    .unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), ctx.packageName) == AppOpsManager.MODE_ALLOWED
+private fun isBatteryExempt(ctx: android.content.Context): Boolean =
+    ctx.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName)
+
+private fun requestBatteryExemption(ctx: android.content.Context) {
+    try {
+        ctx.startActivity(
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${ctx.packageName}"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    } catch (_: Exception) {
+        try { ctx.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (_: Exception) {}
+    }
+}
+
+@Composable
+fun BatteryCard() {
+    val ctx = LocalContext.current
+    var exempt by remember { mutableStateOf(isBatteryExempt(ctx)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { exempt = isBatteryExempt(ctx) }
+    if (exempt) return
+    Tile {
+        Text("Keep locked sessions alive", color = C.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Text(
+            "Allow FlipFocus to ignore battery optimization so alarms, sensors and vibration are less likely to be paused while the screen is off.",
+            color = C.muted, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp),
+        )
+        Row {
+            TextButton(onClick = { requestBatteryExemption(ctx) }) { Text("Allow", color = C.accent) }
+            TextButton(onClick = {
+                try { ctx.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (_: Exception) {}
+            }) { Text("Battery settings", color = C.muted) }
+        }
+    }
+}
 
 @Composable
 fun UsageCard() {
     val ctx = LocalContext.current
-    var granted by remember { mutableStateOf(hasUsage(ctx)) }
+    var granted by remember { mutableStateOf(ctx.hasUsageAccess()) }
     var days by rememberSaveable { mutableIntStateOf(1) }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { granted = hasUsage(ctx) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { granted = ctx.hasUsageAccess() }
     val rows by produceState(emptyList<Pair<String, Long>>(), granted, days) {
         value = if (!granted) emptyList() else withContext(Dispatchers.IO) {
             val cal = Calendar.getInstance().apply {
@@ -485,7 +749,7 @@ fun UsageCard() {
             }
         }
         if (!granted) {
-            Text("Allow usage access to see which apps use your time.", color = C.muted, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
+            Text("Allow usage access for app usage and more reliable utility detection while locked.", color = C.muted, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
             TextButton(onClick = { ctx.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }) { Text("Allow usage access", color = C.accent) }
         } else if (rows.isEmpty()) {
             Text("No usage yet.", color = C.muted, modifier = Modifier.padding(top = 8.dp))
