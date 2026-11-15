@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.hardware.*
+import android.media.AudioAttributes
 import android.os.*
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
@@ -135,7 +136,7 @@ class FocusService : Service(), SensorEventListener {
                 when {
                     !armed -> {
                         FocusState.phase.value = Phase.ARMING
-                        if (down && now - downSince >= ARM_MS) { armed = true; pulse() }
+                        if (down && now - downSince >= ARM_MS) { armed = true; FocusState.armed.value = true; pulse() }
                     }
                     violating -> {
                         faceUp += dt
@@ -194,20 +195,23 @@ class FocusService : Service(), SensorEventListener {
 
     override fun onSensorChanged(e: SensorEvent) {
         when (e.sensor.type) {
-            Sensor.TYPE_ACCELEROMETER -> zf = 0.8f * zf + 0.2f * e.values[2]
-            Sensor.TYPE_PROXIMITY -> near = e.values[0] < minOf(5f, e.sensor.maximumRange)
+            Sensor.TYPE_ACCELEROMETER -> { zf = 0.8f * zf + 0.2f * e.values[2]; FocusState.z.value = zf }
+            Sensor.TYPE_PROXIMITY -> { near = e.values[0] < minOf(5f, e.sensor.maximumRange); FocusState.near.value = near }
         }
     }
     override fun onAccuracyChanged(s: Sensor?, a: Int) {}
 
     private fun startVib() {
         val eff = VibrationEffect.createWaveform(longArrayOf(0, 500, 300), 0) // repeat from index 0
-        val attrs = VibrationAttributes.Builder().setUsage(VibrationAttributes.USAGE_ALARM).build()
-        vib.vibrate(eff, attrs)
+        buzz(eff)
+    }
+    @Suppress("DEPRECATION")
+    private fun buzz(e: VibrationEffect) {
+        val aa = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
+        try { vib.vibrate(e, aa) } catch (t: Throwable) { vib.vibrate(e) }
     }
     private fun pulse() { // short buzz = "armed"; also confirms vibration works
-        val a = VibrationAttributes.Builder().setUsage(VibrationAttributes.USAGE_ALARM).build()
-        vib.vibrate(VibrationEffect.createOneShot(120, 255), a)
+        buzz(VibrationEffect.createOneShot(120, 255))
     }
     private fun stopVib() { if (::vib.isInitialized) vib.cancel() }
 

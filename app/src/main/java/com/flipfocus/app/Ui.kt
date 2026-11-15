@@ -105,6 +105,9 @@ fun FocusScreen() {
     val phase by FocusState.phase.collectAsState()
     val rem by FocusState.remainingMs.collectAsState()
     val total by FocusState.totalMs.collectAsState()
+    val zv by FocusState.z.collectAsState()
+    val nr by FocusState.near.collectAsState()
+    val ar by FocusState.armed.collectAsState()
     var mins by rememberSaveable { mutableIntStateOf(25) }
     var customDialog by remember { mutableStateOf(false) }
     var confirming by remember { mutableStateOf(false) }
@@ -143,6 +146,8 @@ fun FocusScreen() {
         }
         Spacer(Modifier.height(24.dp))
         Text(status, color = color, fontSize = 18.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
+        if (active) Text("z=${zv?.let { "%.1f".format(it) } ?: "no data"} · prox=${when (nr) { true -> "near"; false -> "far"; null -> "none" }} · armed=$ar",
+            color = C.muted, fontSize = 12.sp, fontFamily = Mono, modifier = Modifier.padding(top = 8.dp))
         Spacer(Modifier.weight(1f))
         if (!active) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -157,6 +162,7 @@ fun FocusScreen() {
                 }
             }
             Text("minutes", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp, bottom = 12.dp))
+            Text("Test vibration", color = C.muted, fontSize = 14.sp, modifier = Modifier.clickable { testVibrate(ctx) }.padding(bottom = 8.dp))
             Text("Utility apps · ${util.size}/5", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { picking = true }.padding(bottom = 16.dp))
             Pill("Start focus", true, {
                 launcher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_PHONE_STATE))
@@ -508,4 +514,13 @@ fun BlockedCard(top: List<PkgCount>) {
             }
         }
     }
+}
+
+@Suppress("DEPRECATION")
+fun testVibrate(ctx: android.content.Context) {
+    val v = ctx.getSystemService(android.os.VibratorManager::class.java).defaultVibrator
+    val e = android.os.VibrationEffect.createOneShot(600, 255)
+    val aa = android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ALARM).build()
+    try { v.vibrate(e, aa) } catch (t: Throwable) { v.vibrate(e) }
+    android.widget.Toast.makeText(ctx, "hasVibrator=${v.hasVibrator()}", android.widget.Toast.LENGTH_SHORT).show()
 }

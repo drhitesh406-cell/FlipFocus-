@@ -95,7 +95,10 @@ object FocusState {
     @Volatile var blockedApps: Set<String> = emptySet()
     @Volatile var utilityApps: Set<String> = emptySet()
     @Volatile var utilityActive = false
-    fun reset() { phase.value = Phase.IDLE; remainingMs.value = 0; sessionId = 0; blockedApps = emptySet(); utilityActive = false }
+    val z = MutableStateFlow<Float?>(null)
+    val near = MutableStateFlow<Boolean?>(null)
+    val armed = MutableStateFlow(false)
+    fun reset() { phase.value = Phase.IDLE; remainingMs.value = 0; sessionId = 0; blockedApps = emptySet(); utilityActive = false; z.value = null; near.value = null; armed.value = false }
 }
 
 object Prefs {
