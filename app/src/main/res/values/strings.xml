@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">FlipFocus</string>
+    <string name="blocker_desc">Sends you back to the home screen when you open an app you chose to block during a focus session. Nothing is read, stored or sent anywhere.</string>
+</resources>
