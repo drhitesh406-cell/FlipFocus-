@@ -9,6 +9,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -155,8 +158,8 @@ private fun TabIcon(index: Int, active: Boolean) {
 @Composable
 private fun UtilityStrip(apps: Set<String>, active: String?, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
-    val labels by produceState(emptyMap<String, String>(), apps) {
-        value = withContext(Dispatchers.IO) { apps.associateWith { labelOf(ctx, it) } }
+    val icons by produceState(emptyMap<String, ImageBitmap?>(), apps) {
+        value = withContext(Dispatchers.IO) { apps.associateWith { iconOf(ctx, it) } }
     }
     Column(
         modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(C.surface)
@@ -172,10 +175,9 @@ private fun UtilityStrip(apps: Set<String>, active: String?, modifier: Modifier 
             Text("None selected", color = C.muted, fontSize = 13.sp)
         } else {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                apps.sortedBy { (labels[it] ?: it).lowercase() }.forEach { pkg ->
-                    val label = labels[pkg] ?: pkg
+                apps.sorted().forEach { pkg ->
                     val on = active == pkg
-                    Row(
+                    Box(
                         Modifier.clip(RoundedCornerShape(12.dp))
                             .background(if (on) C.accent else C.bg)
                             .border(1.dp, C.line, RoundedCornerShape(12.dp))
@@ -185,15 +187,10 @@ private fun UtilityStrip(apps: Set<String>, active: String?, modifier: Modifier 
                                         ctx.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                                     }
                                 } catch (_: Exception) {}
-                            }
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            }.padding(6.dp),
                     ) {
-                        Box(Modifier.size(24.dp).clip(CircleShape).background(if (on) C.text else C.accent), contentAlignment = Alignment.Center) {
-                            Text(label.firstOrNull()?.uppercaseChar()?.toString() ?: "?", color = C.bg, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        Text(label, color = if (on) Color.Black else C.text, fontSize = 12.sp, maxLines = 1, modifier = Modifier.widthIn(max = 100.dp))
+                        val ic = icons[pkg]
+                        if (ic != null) Image(ic, null, Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))) else Box(Modifier.size(36.dp))
                     }
                 }
             }
@@ -573,6 +570,9 @@ fun AppPicker(selected: Set<String>, onChange: (Set<String>) -> Unit, max: Int =
             item { OutlinedTextField(q, { q = it }, label = { Text("Search apps") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
             items(shown, key = { it.first }) { (pkg, label) ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    val icon by produceState<ImageBitmap?>(null, pkg) { value = withContext(Dispatchers.IO) { iconOf(ctx, pkg) } }
+                    Box(Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))) { icon?.let { Image(it, null, Modifier.fillMaxSize()) } }
+                    Spacer(Modifier.width(12.dp))
                     Text(label, color = C.text, modifier = Modifier.weight(1f), fontSize = 16.sp)
                     Switch(
                         checked = pkg in selected,
@@ -703,6 +703,13 @@ fun Stat(label: String, value: String, modifier: Modifier = Modifier) = Tile(mod
     Text(value, fontFamily = Mono, fontSize = 24.sp, color = C.text)
     Text(label, color = C.muted, fontSize = 13.sp)
 }
+
+private fun iconOf(ctx: android.content.Context, pkg: String): ImageBitmap? = try {
+    val d = ctx.packageManager.getApplicationIcon(pkg)
+    val bmp = android.graphics.Bitmap.createBitmap(96, 96, android.graphics.Bitmap.Config.ARGB_8888)
+    d.setBounds(0, 0, 96, 96); d.draw(android.graphics.Canvas(bmp))
+    bmp.asImageBitmap()
+} catch (_: Exception) { null }
 
 private fun labelOf(ctx: android.content.Context, pkg: String) = try {
     ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(pkg, PackageManager.ApplicationInfoFlags.of(0))).toString()
