@@ -260,6 +260,12 @@ fun FocusScreen() {
         TaggingScreen(pendingTags) { FocusState.clearPendingTags() }
         return
     }
+    var liftedWhileConfirming by remember { mutableStateOf(false) }
+    LaunchedEffect(confirming, phase) {
+        if (!confirming) liftedWhileConfirming = false
+        else if (phase == Phase.VIOLATION || phase == Phase.ARMING) liftedWhileConfirming = true
+        else if (phase == Phase.FOCUSED && liftedWhileConfirming) confirming = false
+    }
     if (active && confirming && phase != Phase.BREAK) {
         RethinkScreen({ confirming = false }) { confirming = false; FocusService.stop(ctx) }
         return
@@ -282,10 +288,13 @@ fun FocusScreen() {
     val animatedColor by animateColorAsState(color, tween(200), label = "status")
     val originLabel = if (scheduled) "scheduled" else "manual"
 
-    Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(Modifier.weight(1f))
+    Column(
+        (if (active) Modifier.fillMaxSize() else Modifier.fillMaxSize().verticalScroll(rememberScrollState())).padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (active) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(8.dp))
         Box(contentAlignment = Alignment.Center) {
-            val ringSize = if (active) 230.dp else 280.dp
+            val ringSize = if (active) 230.dp else 240.dp
             if (active) Box(Modifier.size(ringSize + 22.dp).background(Brush.radialGradient(listOf(animatedColor.copy(alpha = 0.10f), Color.Transparent))))
             Canvas(Modifier.size(ringSize)) {
                 val sw = 6.dp.toPx()
@@ -308,7 +317,7 @@ fun FocusScreen() {
         AnimatedVisibility(visible = active && phase != Phase.BREAK, enter = fadeIn(), exit = fadeOut()) {
             UtilityStrip(utilityApps, activeUtility)
         }
-        Spacer(Modifier.weight(1f))
+        if (active) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(20.dp))
         when {
             phase == Phase.BREAK -> {
                 Text("Session complete · 5-minute break", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp))
@@ -344,20 +353,21 @@ fun FocusScreen() {
                     launcher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_PHONE_STATE))
                 }, Modifier.fillMaxWidth())
             }
-            else -> Pill("End session", false, { confirming = true }, Modifier.fillMaxWidth())
+            else -> Pill("End session", false, {
+                if (total - rem < 60_000L) FocusService.stop(ctx) else confirming = true
+            }, Modifier.fillMaxWidth())
         }
     }
     if (customDialog) {
-        var txt by remember { mutableStateOf(if (mins in PRESETS) "" else "$mins") }
+        var pick by remember { mutableIntStateOf(mins) }
         AlertDialog(
             onDismissRequest = { customDialog = false }, containerColor = C.surface,
-            title = { Text("Custom duration") },
+            title = { Text("Custom duration (hours · minutes)") },
             text = {
-                OutlinedTextField(txt, { txt = it.filter(Char::isDigit).take(3) }, label = { Text("Minutes (1–720)") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                DurationWheel(mins) { pick = it }
             },
             confirmButton = {
-                TextButton(onClick = { txt.toIntOrNull()?.let { mins = it.coerceIn(1, 720) }; customDialog = false }) { Text("Set", color = C.accent) }
+                TextButton(onClick = { mins = pick.coerceIn(1, 720); customDialog = false }) { Text("Set", color = C.accent) }
             },
             dismissButton = { TextButton(onClick = { customDialog = false }) { Text("Cancel", color = C.muted) } },
         )
@@ -400,7 +410,7 @@ fun SchedulesScreen() {
     }
     val e = editing
     if (e != null) {
-        if (runningId == e.id) {
+        if (e.id != 0 && runningId == e.id) {
             ScheduleLockedScreen(e) { editing = null }
             return
         }
@@ -459,7 +469,8 @@ fun SchedulesScreen() {
         }
         item {
             Pill("New schedule", false, {
-                editing = ScheduleEntity(name = "", days = 0b0011111, startMin = 22 * 60, endMin = 6 * 60)
+                val nh = (Calendar.getInstance().get(Calendar.HOUR_OF_DAY) + 1) % 24
+                editing = ScheduleEntity(name = "", days = 0b1111111, startMin = nh * 60, endMin = ((nh + 1) % 24) * 60)
             }, Modifier.fillMaxWidth())
         }
     }
@@ -471,9 +482,9 @@ fun ScheduleEditor(init: ScheduleEntity, all: List<ScheduleEntity>, onClose: () 
     var name by remember { mutableStateOf(init.name) }
     var days by remember { mutableIntStateOf(init.days) }
     var conflictName by remember { mutableStateOf<String?>(null) }
-    val st = rememberTimePickerState(init.startMin / 60, init.startMin % 60, false)
-    val en = rememberTimePickerState(init.endMin / 60, init.endMin % 60, false)
-    LaunchedEffect(name, days, st.hour, st.minute, en.hour, en.minute) { conflictName = null }
+    var startMin by remember { mutableIntStateOf(init.startMin) }
+    var endMin by remember { mutableIntStateOf(init.endMin) }
+    LaunchedEffect(name, days, startMin, endMin) { conflictName = null }
     BackHandler { onClose() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Title(if (init.id == 0) "New schedule" else "Edit schedule")
@@ -489,19 +500,19 @@ fun ScheduleEditor(init: ScheduleEntity, all: List<ScheduleEntity>, onClose: () 
             }
         }
         Tile {
-            Text("Start · ${hhmm(st.hour * 60 + st.minute)}", color = C.muted)
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { TimePicker(state = st) }
+            Text("Start · ${hhmm(startMin)}", color = C.muted)
+            TimeWheel(init.startMin) { startMin = it }
         }
         Tile {
-            Text("End · ${hhmm(en.hour * 60 + en.minute)}", color = C.muted)
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { TimePicker(state = en) }
+            Text("End · ${hhmm(endMin)}", color = C.muted)
+            TimeWheel(init.endMin) { endMin = it }
         }
         Text("12-hour clock. Overlapping enabled schedules are blocked. Monitoring starts even when the app is closed or locked.", color = C.muted, fontSize = 13.sp)
         if (conflictName != null) Text("Overlaps “$conflictName”. Adjust the days or times.", color = C.bad, fontSize = 13.sp)
         Pill("Save", true, {
             val candidate = init.copy(
                 name = name.ifBlank { "Focus" }, days = days,
-                startMin = st.hour * 60 + st.minute, endMin = en.hour * 60 + en.minute,
+                startMin = startMin, endMin = endMin,
             )
             val c = Scheduler.conflict(candidate, all)
             if (c == null) onSave(candidate) else conflictName = c.name
