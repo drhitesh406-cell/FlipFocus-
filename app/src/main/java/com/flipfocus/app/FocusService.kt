@@ -1,5 +1,6 @@
 package com.flipfocus.app
 
+import androidx.core.app.NotificationCompat
 import android.Manifest
 import android.app.*
 import android.app.usage.UsageEvents
@@ -33,6 +34,7 @@ class FocusService : Service(), SensorEventListener {
         const val EXTRA_SCHEDULED = "scheduled"
         const val EXTRA_SCHEDULE_ID = "scheduleId"
         private const val CH = "focus"
+        private const val LIVE_CH = "focus_live"
         private const val NID = 1
         private const val GRACE_MS = 3_000L
         private const val FAIL_MS = 5_000L
@@ -524,68 +526,77 @@ class FocusService : Service(), SensorEventListener {
     private fun channel(nm: NotificationManager) =
         nm.createNotificationChannel(NotificationChannel(CH, "Focus session", NotificationManager.IMPORTANCE_LOW))
 
+    /** Live-update channel: HIGH importance (like other Now Bar apps) but silent, so it never makes noise itself. */
+    private fun liveChannel(nm: NotificationManager) = nm.createNotificationChannel(
+        NotificationChannel(LIVE_CH, "Focus session (live)", NotificationManager.IMPORTANCE_HIGH).apply {
+            setSound(null, null); enableVibration(false); setShowBadge(false)
+        },
+    )
+
     private fun notif(): Notification {
-        channel(getSystemService(NotificationManager::class.java))
+        liveChannel(getSystemService(NotificationManager::class.java))
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(
             this, 1, Intent(this, FocusService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE,
         )
-        return Notification.Builder(this, CH)
+        val green = 0xFF7FA87F.toInt()
+        val b = NotificationCompat.Builder(this, LIVE_CH)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(sessionTitle)
             .setContentText("${timeLeft()} left · $statusText")
-            .withProgress()
-            .setColor(0xFF7FA87F.toInt())
-            .setCategory(Notification.CATEGORY_PROGRESS)
+            .setSubText("FlipFocus")
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setVisibility(Notification.VISIBILITY_PUBLIC)
-            .apply { if (endWall > 0) setWhen(endWall).setShowWhen(false).setUsesChronometer(true).setChronometerCountDown(true) }
-            .addExtras(liveExtras(chipText())) // Android 16 live update: status-bar chip / Now Bar
-            .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "End", stop).build())
-            .build()
-    }
-
-    /** Live progress bar: Android 16 ProgressStyle (needed for Live Updates / Now Bar), classic bar below that. */
-    private fun Notification.Builder.withProgress(): Notification.Builder {
-        if (totalSec <= 0) return this
-        val done = (totalSec - (endWall - System.currentTimeMillis()) / 1000).toInt().coerceIn(0, totalSec)
-        return if (Build.VERSION.SDK_INT >= 36) {
-            setStyle(
-                Notification.ProgressStyle().setStyledByProgress(false).setProgress(done)
-                    .setProgressSegments(listOf(Notification.ProgressStyle.Segment(totalSec).setColor(0xFF7FA87F.toInt()))),
+            .setSilent(true)
+            .setAutoCancel(false)
+            .setColor(green)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setRequestPromotedOngoing(true) // Android 16+ Live Update (status-bar chip / Now Bar)
+            .setShortCriticalText(chipText())
+            .addAction(NotificationCompat.Action.Builder(R.drawable.ic_stat, "End", stop).build())
+        if (endWall > 0) b.setWhen(endWall).setShowWhen(false).setUsesChronometer(true).setChronometerCountDown(true)
+        if (totalSec > 0) {
+            val done = (totalSec - (endWall - System.currentTimeMillis()) / 1000).toInt().coerceIn(0, totalSec)
+            b.setProgress(totalSec, done, false)
+            b.setStyle(
+                NotificationCompat.ProgressStyle().setStyledByProgress(false).setProgress(done)
+                    .setProgressSegments(listOf(NotificationCompat.ProgressStyle.Segment(totalSec).setColor(green))),
             )
-        } else setProgress(totalSec, done, false)
+        }
+        return b.build()
     }
 
     private fun breakNotif(): Notification {
-        channel(getSystemService(NotificationManager::class.java))
+        liveChannel(getSystemService(NotificationManager::class.java))
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val skip = PendingIntent.getService(
             this, 2, Intent(this, FocusService::class.java).setAction(ACTION_SKIP_BREAK), PendingIntent.FLAG_IMMUTABLE,
         )
-        return Notification.Builder(this, CH)
+        return NotificationCompat.Builder(this, LIVE_CH)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle("Focus break")
-            .setWhen(breakEndWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
-            .addExtras(liveExtras(null))
             .setContentText("Vibration and failure detection are paused")
+            .setSubText("FlipFocus")
+            .setWhen(breakEndWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "Skip break", skip).build())
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setColor(0xFF7FA87F.toInt())
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setRequestPromotedOngoing(true)
+            .setShortCriticalText("Break")
+            .addAction(NotificationCompat.Action.Builder(R.drawable.ic_stat, "Skip break", skip).build())
             .build()
     }
 
     private fun timeLeft(): String {
         val s = ((endWall - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
         return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60) else "%02d:%02d".format(s / 60, s % 60)
-    }
-
-    /** Android 16 Live Update request (same flag as Notification.Builder.setRequestPromotedOngoing, missing from SDK 36 stubs). */
-    private fun liveExtras(chip: String?) = Bundle().apply {
-        putBoolean("android.requestPromotedOngoing", true)
-        if (chip != null) putString("android.shortCriticalText", chip) // short text shown in the chip / Now Bar pill
     }
 
     private fun chipText(): String {
