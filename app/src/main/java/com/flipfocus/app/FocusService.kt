@@ -110,6 +110,7 @@ class FocusService : Service(), SensorEventListener {
     private var lastTingAt = 0L
     private var breakEndWall = 0L
     private var openOnUnlock = false
+    private var totalSec = 0
     private var vibSince = 0L
     private var lastSecLeft = -1L
     private val screenRx = object : BroadcastReceiver() {
@@ -198,6 +199,7 @@ class FocusService : Service(), SensorEventListener {
         sessionId = dao.insert(SessionEntity(startMs = startWall, plannedMs = plannedMs, scheduled = scheduled))
         FocusState.sessionId = sessionId
         endWall = startWall + plannedMs
+        totalSec = (plannedMs / 1000).toInt()
         sessionTitle = if (scheduled) "Schedule · " + ((if (scheduleId > 0) dao.schedule(scheduleId)?.name else null)?.ifBlank { "Focus" } ?: "Focus")
             else "Focus session · ${plannedMs / 60_000} min"
         refreshNotif()
@@ -311,8 +313,8 @@ class FocusService : Service(), SensorEventListener {
             // Unlock haptics can cancel an ongoing repeating vibration: restart it (gentle 0.5s on / 1.5s off pulses) while still face-up.
             if (violating && !paused && !FocusState.utilityActive && now - lastVibAt >= 4_000L) startVib()
             val st = when {
-                now < noteUntil -> "Buzzed: you opened another app"
-                FocusState.phase.value == Phase.VIOLATION -> "Vibrating: phone is face-up. Place it face-down"
+                now < noteUntil -> "Buzzed · another app opened"
+                FocusState.phase.value == Phase.VIOLATION -> "Vibrating · put phone face-down"
                 FocusState.phase.value == Phase.UTILITY -> "Utility app open · vibration paused"
                 FocusState.phase.value == Phase.PAUSED_CALL -> "Paused for call"
                 FocusState.phase.value == Phase.ARMING -> "Place phone face-down"
@@ -530,15 +532,27 @@ class FocusService : Service(), SensorEventListener {
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(sessionTitle)
             .setContentText("${timeLeft()} left · $statusText")
-            .setStyle(Notification.BigTextStyle().bigText("${timeLeft()} left · $statusText"))
+            .withProgress()
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
-            .apply { if (endWall > 0) setWhen(endWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true) }
+            .apply { if (endWall > 0) setWhen(endWall).setShowWhen(false).setUsesChronometer(true).setChronometerCountDown(true) }
             .addExtras(liveExtras(chipText())) // Android 16 live update: status-bar chip / Now Bar
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "End", stop).build())
             .build()
+    }
+
+    /** Live progress bar: Android 16 ProgressStyle (needed for Live Updates / Now Bar), classic bar below that. */
+    private fun Notification.Builder.withProgress(): Notification.Builder {
+        if (totalSec <= 0) return this
+        val done = (totalSec - (endWall - System.currentTimeMillis()) / 1000).toInt().coerceIn(0, totalSec)
+        return if (Build.VERSION.SDK_INT >= 36) {
+            setStyle(
+                Notification.ProgressStyle().setStyledByProgress(false).setProgress(done)
+                    .setProgressSegments(listOf(Notification.ProgressStyle.Segment(totalSec))),
+            )
+        } else setProgress(totalSec, done, false)
     }
 
     private fun breakNotif(): Notification {
