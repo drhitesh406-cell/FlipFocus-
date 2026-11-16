@@ -108,6 +108,7 @@ class FocusService : Service(), SensorEventListener {
     private var endWall = 0L
     private var noteUntil = 0L
     private var lastTingAt = 0L
+    private var breakEndWall = 0L
     private val screenRx = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             if (i.action == Intent.ACTION_USER_PRESENT) getSystemService(NotificationManager::class.java).cancel(2)
@@ -330,6 +331,7 @@ class FocusService : Service(), SensorEventListener {
         FocusState.phase.value = Phase.BREAK
         FocusState.totalMs.value = BREAK_MS
         FocusState.remainingMs.value = BREAK_MS
+        breakEndWall = System.currentTimeMillis() + BREAK_MS
         showBreakNotification()
         if (::sm.isInitialized && sensorsRegistered) { sm.unregisterListener(this); sensorsRegistered = false }
         if (telReg) { tm.unregisterTelephonyCallback(callCb); telReg = false }
@@ -521,6 +523,7 @@ class FocusService : Service(), SensorEventListener {
             .setOnlyAlertOnce(true)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .apply { if (endWall > 0) setWhen(endWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true) }
+            .apply { if (Build.VERSION.SDK_INT >= 36) setRequestPromotedOngoing(true) } // Live update: status-bar chip / Now Bar
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "End", stop).build())
             .build()
     }
@@ -534,6 +537,8 @@ class FocusService : Service(), SensorEventListener {
         return Notification.Builder(this, CH)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle("Focus break")
+            .setWhen(breakEndWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
+            .apply { if (Build.VERSION.SDK_INT >= 36) setRequestPromotedOngoing(true) }
             .setContentText("Vibration and failure detection are paused")
             .setContentIntent(open)
             .setOngoing(true)

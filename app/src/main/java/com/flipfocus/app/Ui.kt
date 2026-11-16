@@ -407,6 +407,7 @@ fun SchedulesScreen() {
     var usage by remember { mutableStateOf(ctx.hasUsageAccess()) }
     var notif by remember { mutableStateOf(ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) }
     var fsi by remember { mutableStateOf(ctx.canFsi()) }
+    var live by remember { mutableStateOf(ctx.canLive()) }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { notif = it }
     var editing by remember { mutableStateOf<ScheduleEntity?>(null) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -414,6 +415,7 @@ fun SchedulesScreen() {
         usage = ctx.hasUsageAccess()
         notif = ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         fsi = ctx.canFsi()
+        live = ctx.canLive()
         scope.launch(Dispatchers.IO) { Scheduler.rescheduleAll(ctx) }
     }
     val e = editing
@@ -443,6 +445,14 @@ fun SchedulesScreen() {
             Tile {
                 Text("Allow notifications so the running-session notification shows what each vibration is for.", color = C.muted, fontSize = 14.sp)
                 TextButton(onClick = { notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text("Allow notifications", color = C.accent) }
+            }
+        }
+        if (!live) item {
+            Tile {
+                Text("Turn on live notifications so the session timer shows in the status bar and Now Bar.", color = C.muted, fontSize = 14.sp)
+                TextButton(onClick = {
+                    ctx.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName))
+                }) { Text("Open settings", color = C.accent) }
             }
         }
         if (!fsi) item {
