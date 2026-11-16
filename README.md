@@ -17,7 +17,7 @@ Allow notifications and phone state when asked. In Schedules, allow exact alarms
 - Monitoring starts immediately; no initial face-down flip is needed.
 - Schedules use Android alarm-clock triggers, so a session can start and vibrate while FlipFocus is closed and the phone is locked.
 - Schedule times use a 12-hour clock dial. Overlapping enabled schedules are blocked, and the currently running schedule cannot be edited.
-- Any session left face-up for over 5 seconds is marked failed and excluded from total time. Pressing End session itself does not create a failure.
+- If the phone is still face-up 5 seconds after the vibration starts, the session ends as failed and is excluded from total time. Pressing End session itself does not create a failure.
 - A successful session starts an automatic 5-minute break with vibration/failure detection paused; it can be skipped from the app or notification.
 - After a session ends, each pickup can be tagged Call / Utility / Urge / Other, or skipped; tag patterns appear in Analytics.
 - Focus includes built-in quick-start templates and custom saved templates. No widgets or tiles are used.
@@ -25,3 +25,5 @@ Allow notifications and phone state when asked. In Schedules, allow exact alarms
 - Subtle dark-theme animations cover tab crossfades, progress/status color, ring glow, utility cards, streak dots and heatmap cells.
 
 Fonts: Geist (SIL OFL 1.1). minSdk 33, targetSdk 36.
+
+Live notifications / Now Bar (Android 16, One UI 8): allow live notifications for FlipFocus in app notification settings. On Samsung, apps outside Samsung's allowlist also need Developer options > "Live notifications for all apps" turned on.

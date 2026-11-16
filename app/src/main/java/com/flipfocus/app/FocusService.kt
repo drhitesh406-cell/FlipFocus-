@@ -110,6 +110,7 @@ class FocusService : Service(), SensorEventListener {
     private var lastTingAt = 0L
     private var breakEndWall = 0L
     private var openOnUnlock = false
+    private var vibSince = 0L
     private var lastSecLeft = -1L
     private val screenRx = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
@@ -299,12 +300,12 @@ class FocusService : Service(), SensorEventListener {
                     val upFor = now - upSince
                     if (upFor >= GRACE_MS) {
                         faceUp += dt
-                        if (!violating) { violating = true; pickups++; logPickup(); startVib() }
+                        if (!violating) { violating = true; vibSince = now; pickups++; logPickup(); startVib() }
                         FocusState.phase.value = Phase.VIOLATION
                     } else {
                         FocusState.phase.value = Phase.ARMING
                     }
-                    if (now - failSince >= FAIL_MS) markFailed()
+                    if (violating && now - vibSince >= FAIL_MS) markFailed() // 5 s after vibration started
                 }
             }
             // Unlock haptics can cancel an ongoing repeating vibration: restart it (gentle 0.5s on / 1.5s off pulses) while still face-up.
@@ -535,8 +536,7 @@ class FocusService : Service(), SensorEventListener {
             .setOnlyAlertOnce(true)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .apply { if (endWall > 0) setWhen(endWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true) }
-            .addExtras(liveExtras()) // Live update: status-bar chip / Now Bar
-            .addExtras(samsungLive(timeLeft(), "$sessionTitle · $statusText"))
+            .addExtras(liveExtras(chipText())) // Android 16 live update: status-bar chip / Now Bar
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "End", stop).build())
             .build()
     }
@@ -549,10 +549,9 @@ class FocusService : Service(), SensorEventListener {
         )
         return Notification.Builder(this, CH)
             .setSmallIcon(R.drawable.ic_stat)
-            .addExtras(samsungLive("Focus break", "Vibration and failure detection are paused"))
             .setContentTitle("Focus break")
             .setWhen(breakEndWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
-            .addExtras(liveExtras())
+            .addExtras(liveExtras(null))
             .setContentText("Vibration and failure detection are paused")
             .setContentIntent(open)
             .setOngoing(true)
@@ -560,22 +559,20 @@ class FocusService : Service(), SensorEventListener {
             .build()
     }
 
-    /** Experimental, undocumented One UI "ongoing activity" extras for the Now Bar card; ignored elsewhere. */
-    private fun samsungLive(primary: String, secondary: String) = Bundle().apply {
-        if (!Build.MANUFACTURER.equals("samsung", true)) return@apply
-        putInt("android.ongoingActivityNoti.style", 1)
-        putString("android.ongoingActivityNoti.primaryInfo", primary)
-        putString("android.ongoingActivityNoti.secondaryInfo", secondary)
-        putString("android.ongoingActivityNoti.nowbarPrimaryInfo", primary)
-        putString("android.ongoingActivityNoti.nowbarSecondaryInfo", secondary)
-    }
-
-    /** Same flag as Notification.Builder.setRequestPromotedOngoing, which is missing from the SDK 36 stubs. */
-    private fun liveExtras() = Bundle().apply { putBoolean("android.requestPromotedOngoing", true) }
-
     private fun timeLeft(): String {
         val s = ((endWall - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
         return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60) else "%02d:%02d".format(s / 60, s % 60)
+    }
+
+    /** Android 16 Live Update request (same flag as Notification.Builder.setRequestPromotedOngoing, missing from SDK 36 stubs). */
+    private fun liveExtras(chip: String?) = Bundle().apply {
+        putBoolean("android.requestPromotedOngoing", true)
+        if (chip != null) putString("android.shortCriticalText", chip) // short text shown in the chip / Now Bar pill
+    }
+
+    private fun chipText(): String {
+        val s = ((endWall - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+        return if (s >= 3600) "%dh%02dm".format(s / 3600, (s % 3600) / 60) else "%02d:%02d".format(s / 60, s % 60)
     }
 
     private fun refreshNotif() { getSystemService(NotificationManager::class.java).notify(NID, notif()) }
