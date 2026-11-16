@@ -238,6 +238,14 @@ class FocusService : Service(), SensorEventListener {
                 upSince = 0L
                 failSince = 0L
                 FocusState.phase.value = if (paused) Phase.PAUSED_CALL else Phase.UTILITY
+            } else if (!power.isInteractive || kg?.isKeyguardLocked == true) {
+                // Locked / screen off: never vibrate and never fail. Grace and fail timers restart on unlock.
+                if (violating) stopVib()
+                violating = false
+                downSince = 0L
+                upSince = 0L
+                failSince = 0L
+                FocusState.phase.value = Phase.FOCUSED
             } else if (!hasZSample && now - start < SENSOR_WARMUP_MS) {
                 FocusState.phase.value = Phase.ARMING
             } else {
@@ -277,8 +285,8 @@ class FocusService : Service(), SensorEventListener {
                     if (now - failSince >= FAIL_MS) markFailed()
                 }
             }
-            // Unlock haptics can cancel an ongoing repeating vibration: restart it while still face-up.
-            if (violating && !paused && !FocusState.utilityActive && now - lastVibAt >= 2_000L) startVib()
+            // Unlock haptics can cancel an ongoing repeating vibration: restart it (gentle 0.5s on / 1.5s off pulses) while still face-up.
+            if (violating && !paused && !FocusState.utilityActive && now - lastVibAt >= 4_000L) startVib()
             FocusState.remainingMs.value = end - now
             delay(250)
         }
@@ -436,7 +444,7 @@ class FocusService : Service(), SensorEventListener {
         FocusState.pendingTags.value = FocusState.pendingTags.value + PickupTag(id, ts)
     }
 
-    private fun startVib() { lastVibAt = SystemClock.elapsedRealtime(); buzz(VibrationEffect.createWaveform(longArrayOf(0, 500, 300), 0)) }
+    private fun startVib() { lastVibAt = SystemClock.elapsedRealtime(); buzz(VibrationEffect.createWaveform(longArrayOf(0, 500, 1500), 0)) }
 
     private fun registerSensors() {
         if (!::sm.isInitialized) return
