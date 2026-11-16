@@ -204,6 +204,7 @@ enum class Phase { IDLE, ARMING, FOCUSED, VIOLATION, PAUSED_CALL, UTILITY, BREAK
 
 /** In-process live state shared by FocusService and the UI. */
 object FocusState {
+    @Volatile var liveDiag: String = ""
     val phase = MutableStateFlow(Phase.IDLE)
     val remainingMs = MutableStateFlow(0L)
     val totalMs = MutableStateFlow(0L)

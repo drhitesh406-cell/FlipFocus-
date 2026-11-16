@@ -307,6 +307,8 @@ fun FocusScreen() {
         Text(status, color = animatedColor, fontSize = 18.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
         if (active && phase != Phase.BREAK) Text("$originLabel · z=${zv?.let { "%.1f".format(it) } ?: "no data"} · prox=${when (nr) { true -> "near"; false -> "far"; null -> "none" }} · monitoring=$ar",
             color = C.muted, fontSize = 12.sp, fontFamily = Mono, modifier = Modifier.padding(top = 8.dp))
+        if (active && phase != Phase.BREAK && FocusState.liveDiag.isNotEmpty())
+            Text(FocusState.liveDiag, color = C.muted, fontSize = 12.sp, fontFamily = Mono)
         Spacer(Modifier.height(14.dp))
         AnimatedVisibility(visible = active && phase != Phase.BREAK, enter = fadeIn(), exit = fadeOut()) {
             UtilityStrip(utilityApps, activeUtility)
