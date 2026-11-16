@@ -524,6 +524,7 @@ class FocusService : Service(), SensorEventListener {
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .apply { if (endWall > 0) setWhen(endWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true) }
             .apply { if (Build.VERSION.SDK_INT >= 36) setRequestPromotedOngoing(true) } // Live update: status-bar chip / Now Bar
+            .addExtras(samsungLive(sessionTitle, statusText))
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "End", stop).build())
             .build()
     }
@@ -536,6 +537,7 @@ class FocusService : Service(), SensorEventListener {
         )
         return Notification.Builder(this, CH)
             .setSmallIcon(R.drawable.ic_stat)
+            .addExtras(samsungLive("Focus break", "Vibration and failure detection are paused"))
             .setContentTitle("Focus break")
             .setWhen(breakEndWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
             .apply { if (Build.VERSION.SDK_INT >= 36) setRequestPromotedOngoing(true) }
@@ -544,6 +546,16 @@ class FocusService : Service(), SensorEventListener {
             .setOngoing(true)
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "Skip break", skip).build())
             .build()
+    }
+
+    /** Experimental, undocumented One UI "ongoing activity" extras for the Now Bar card; ignored elsewhere. */
+    private fun samsungLive(primary: String, secondary: String) = Bundle().apply {
+        if (!Build.MANUFACTURER.equals("samsung", true)) return@apply
+        putInt("android.ongoingActivityNoti.style", 1)
+        putString("android.ongoingActivityNoti.primaryInfo", primary)
+        putString("android.ongoingActivityNoti.secondaryInfo", secondary)
+        putString("android.ongoingActivityNoti.nowbarPrimaryInfo", primary)
+        putString("android.ongoingActivityNoti.nowbarSecondaryInfo", secondary)
     }
 
     private fun refreshNotif() { getSystemService(NotificationManager::class.java).notify(NID, notif()) }
