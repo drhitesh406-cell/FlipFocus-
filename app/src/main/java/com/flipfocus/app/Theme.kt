@@ -62,6 +62,17 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(AColor.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(AColor.TRANSPARENT),
         )
+        showOverLock(intent)
         setContent { AppTheme { App(intent.getIntExtra("tab", 0).coerceIn(0, 2)) } }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent); showOverLock(intent)
+    }
+
+    /** Opened by the scheduled-start full-screen notification: show over the lock screen. */
+    private fun showOverLock(i: android.content.Intent) {
+        if (i.getBooleanExtra("fsi", false)) { setShowWhenLocked(true); setTurnScreenOn(true) }
     }
 }

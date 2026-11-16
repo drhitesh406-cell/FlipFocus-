@@ -288,13 +288,10 @@ fun FocusScreen() {
     val animatedColor by animateColorAsState(color, tween(200), label = "status")
     val originLabel = if (scheduled) "scheduled" else "manual"
 
-    Column(
-        (if (active) Modifier.fillMaxSize() else Modifier.fillMaxSize().verticalScroll(rememberScrollState())).padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        if (active) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(8.dp))
+    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Spacer(Modifier.weight(1f))
         Box(contentAlignment = Alignment.Center) {
-            val ringSize = if (active) 230.dp else 240.dp
+            val ringSize = if (active) 215.dp else 185.dp
             if (active) Box(Modifier.size(ringSize + 22.dp).background(Brush.radialGradient(listOf(animatedColor.copy(alpha = 0.10f), Color.Transparent))))
             Canvas(Modifier.size(ringSize)) {
                 val sw = 6.dp.toPx()
@@ -307,9 +304,9 @@ fun FocusScreen() {
                     drawArc(C.line, -90f, 360f, false, tl, sz, style = Stroke(sw, cap = StrokeCap.Round))
                 }
             }
-            Text("%02d:%02d".format(secs / 60, secs % 60), fontFamily = Mono, fontSize = 60.sp, color = C.text)
+            Text("%02d:%02d".format(secs / 60, secs % 60), fontFamily = Mono, fontSize = 50.sp, color = C.text)
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(16.dp))
         Text(status, color = animatedColor, fontSize = 18.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
         if (active && phase != Phase.BREAK) Text("$originLabel · z=${zv?.let { "%.1f".format(it) } ?: "no data"} · prox=${when (nr) { true -> "near"; false -> "far"; null -> "none" }} · monitoring=$ar",
             color = C.muted, fontSize = 12.sp, fontFamily = Mono, modifier = Modifier.padding(top = 8.dp))
@@ -317,7 +314,7 @@ fun FocusScreen() {
         AnimatedVisibility(visible = active && phase != Phase.BREAK, enter = fadeIn(), exit = fadeOut()) {
             UtilityStrip(utilityApps, activeUtility)
         }
-        if (active) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.weight(1f))
         when {
             phase == Phase.BREAK -> {
                 Text("Session complete · 5-minute break", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp))
@@ -335,8 +332,8 @@ fun FocusScreen() {
                         ) { Text(if (custom) (if (sel) "$mins · Custom" else "Custom") else "$m", color = if (sel) Color.Black else C.text, fontWeight = FontWeight.Medium) }
                     }
                 }
-                Text("minutes", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
-                Text("Quick start", color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 6.dp))
+                Text("minutes", color = C.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
+                Text("Quick start", color = C.muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 4.dp))
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     (BUILT_IN_TEMPLATES + customTemplates).forEach { t ->
                         Box(
@@ -345,10 +342,16 @@ fun FocusScreen() {
                                 .clickable { startWithTemplate(t) }.padding(horizontal = 12.dp, vertical = 9.dp),
                         ) { Text("${t.name} · ${t.minutes}m", color = C.text, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
                     }
+                    Box(
+                        Modifier.clip(RoundedCornerShape(14.dp)).background(C.surface)
+                            .border(1.dp, C.accent, RoundedCornerShape(14.dp))
+                            .clickable { showTemplates = true }.padding(horizontal = 14.dp, vertical = 9.dp),
+                    ) { Text("Edit", color = C.accent, fontSize = 13.sp, fontWeight = FontWeight.Medium) }
                 }
-                Text("Manage templates", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { showTemplates = true }.padding(top = 8.dp, bottom = 8.dp))
-                Text("Test vibration", color = C.muted, fontSize = 14.sp, modifier = Modifier.clickable { testVibrate(ctx) }.padding(bottom = 8.dp))
-                Text("Utility apps · ${utilityApps.size}/$MAX_UTILITY_APPS", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { picking = "utility" }.padding(bottom = 16.dp))
+                Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Test vibration", color = C.muted, fontSize = 14.sp, modifier = Modifier.clickable { testVibrate(ctx) })
+                    Text("Utility apps · ${utilityApps.size}/$MAX_UTILITY_APPS", color = C.accent, fontSize = 14.sp, modifier = Modifier.clickable { picking = "utility" })
+                }
                 Pill("Start focus", true, {
                     launcher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.READ_PHONE_STATE))
                 }, Modifier.fillMaxWidth())
@@ -402,10 +405,15 @@ fun SchedulesScreen() {
     val scope = rememberCoroutineScope()
     var exact by remember { mutableStateOf(Scheduler.canExact(ctx)) }
     var usage by remember { mutableStateOf(ctx.hasUsageAccess()) }
+    var notif by remember { mutableStateOf(ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) }
+    var fsi by remember { mutableStateOf(ctx.canFsi()) }
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { notif = it }
     var editing by remember { mutableStateOf<ScheduleEntity?>(null) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         exact = Scheduler.canExact(ctx)
         usage = ctx.hasUsageAccess()
+        notif = ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        fsi = ctx.canFsi()
         scope.launch(Dispatchers.IO) { Scheduler.rescheduleAll(ctx) }
     }
     val e = editing
@@ -429,6 +437,20 @@ fun SchedulesScreen() {
             Tile {
                 Text("Allow usage access so FlipFocus can see which app is open: utility apps pause vibration, and any other app you open during a session triggers a buzz.", color = C.muted, fontSize = 14.sp)
                 TextButton(onClick = { ctx.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }) { Text("Open settings", color = C.accent) }
+            }
+        }
+        if (!notif) item {
+            Tile {
+                Text("Allow notifications so the running-session notification shows what each vibration is for.", color = C.muted, fontSize = 14.sp)
+                TextButton(onClick = { notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text("Allow notifications", color = C.accent) }
+            }
+        }
+        if (!fsi) item {
+            Tile {
+                Text("Allow full-screen notifications so a schedule that starts while the phone is locked opens the Focus screen over the lock screen.", color = C.muted, fontSize = 14.sp)
+                TextButton(onClick = {
+                    ctx.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}")))
+                }) { Text("Allow", color = C.accent) }
             }
         }
         if (!exact) item {
@@ -533,10 +555,13 @@ fun AppPicker(selected: Set<String>, onChange: (Set<String>) -> Unit, max: Int =
                 .filter { it.first != ctx.packageName }.distinctBy { it.first }.sortedBy { it.second.lowercase() }
         }
     }
+    var q by remember { mutableStateOf("") }
+    val shown = if (q.isBlank()) apps else apps.filter { it.second.contains(q.trim(), true) }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { Title(title) }
-            items(apps, key = { it.first }) { (pkg, label) ->
+            item { OutlinedTextField(q, { q = it }, label = { Text("Search apps") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+            items(shown, key = { it.first }) { (pkg, label) ->
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(label, color = C.text, modifier = Modifier.weight(1f), fontSize = 16.sp)
                     Switch(
