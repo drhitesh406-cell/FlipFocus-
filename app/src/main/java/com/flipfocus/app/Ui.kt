@@ -406,7 +406,7 @@ fun SchedulesScreen() {
     var exact by remember { mutableStateOf(Scheduler.canExact(ctx)) }
     var usage by remember { mutableStateOf(ctx.hasUsageAccess()) }
     var notif by remember { mutableStateOf(ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) }
-    var fsi by remember { mutableStateOf(ctx.canFsi()) }
+    var overlay by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var live by remember { mutableStateOf(ctx.canLive()) }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { notif = it }
     var editing by remember { mutableStateOf<ScheduleEntity?>(null) }
@@ -414,7 +414,7 @@ fun SchedulesScreen() {
         exact = Scheduler.canExact(ctx)
         usage = ctx.hasUsageAccess()
         notif = ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-        fsi = ctx.canFsi()
+        overlay = Settings.canDrawOverlays(ctx)
         live = ctx.canLive()
         scope.launch(Dispatchers.IO) { Scheduler.rescheduleAll(ctx) }
     }
@@ -455,11 +455,11 @@ fun SchedulesScreen() {
                 }) { Text("Open settings", color = C.accent) }
             }
         }
-        if (!fsi) item {
+        if (!overlay) item {
             Tile {
-                Text("Allow full-screen notifications so a schedule that starts while the phone is locked opens the Focus screen over the lock screen.", color = C.muted, fontSize = 14.sp)
+                Text("Allow \u201cAppear on top\u201d so FlipFocus can open the running session by itself when you unlock a phone that was locked when a schedule started.", color = C.muted, fontSize = 14.sp)
                 TextButton(onClick = {
-                    ctx.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${ctx.packageName}")))
+                    ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}")))
                 }) { Text("Allow", color = C.accent) }
             }
         }
