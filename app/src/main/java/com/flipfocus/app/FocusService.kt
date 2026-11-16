@@ -523,7 +523,7 @@ class FocusService : Service(), SensorEventListener {
             .setOnlyAlertOnce(true)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .apply { if (endWall > 0) setWhen(endWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true) }
-            .apply { if (Build.VERSION.SDK_INT >= 36) setRequestPromotedOngoing(true) } // Live update: status-bar chip / Now Bar
+            .addExtras(liveExtras()) // Live update: status-bar chip / Now Bar
             .addExtras(samsungLive(sessionTitle, statusText))
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "End", stop).build())
             .build()
@@ -540,7 +540,7 @@ class FocusService : Service(), SensorEventListener {
             .addExtras(samsungLive("Focus break", "Vibration and failure detection are paused"))
             .setContentTitle("Focus break")
             .setWhen(breakEndWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
-            .apply { if (Build.VERSION.SDK_INT >= 36) setRequestPromotedOngoing(true) }
+            .addExtras(liveExtras())
             .setContentText("Vibration and failure detection are paused")
             .setContentIntent(open)
             .setOngoing(true)
@@ -557,6 +557,9 @@ class FocusService : Service(), SensorEventListener {
         putString("android.ongoingActivityNoti.nowbarPrimaryInfo", primary)
         putString("android.ongoingActivityNoti.nowbarSecondaryInfo", secondary)
     }
+
+    /** Same flag as Notification.Builder.setRequestPromotedOngoing, which is missing from the SDK 36 stubs. */
+    private fun liveExtras() = Bundle().apply { putBoolean("android.requestPromotedOngoing", true) }
 
     private fun refreshNotif() { getSystemService(NotificationManager::class.java).notify(NID, notif()) }
 
