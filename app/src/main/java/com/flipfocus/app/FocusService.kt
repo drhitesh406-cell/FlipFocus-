@@ -111,6 +111,7 @@ class FocusService : Service(), SensorEventListener {
     private var breakEndWall = 0L
     private var openOnUnlock = false
     private var totalSec = 0
+    private var lastDiagAt = 0L
     private var vibSince = 0L
     private var lastSecLeft = -1L
     private val screenRx = object : BroadcastReceiver() {
@@ -320,6 +321,7 @@ class FocusService : Service(), SensorEventListener {
                 FocusState.phase.value == Phase.ARMING -> "Place phone face-down"
                 else -> "Phone face-down · stay focused"
             }
+            if (now - lastDiagAt > 5_000L) { lastDiagAt = now; liveDiag() }
             val secLeft = (end - now) / 1000
             if (st != statusText || secLeft != lastSecLeft) { statusText = st; lastSecLeft = secLeft; refreshNotif() }
             FocusState.remainingMs.value = end - now
@@ -533,6 +535,8 @@ class FocusService : Service(), SensorEventListener {
             .setContentTitle(sessionTitle)
             .setContentText("${timeLeft()} left · $statusText")
             .withProgress()
+            .setColor(0xFF7FA87F.toInt())
+            .setCategory(Notification.CATEGORY_PROGRESS)
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -550,7 +554,7 @@ class FocusService : Service(), SensorEventListener {
         return if (Build.VERSION.SDK_INT >= 36) {
             setStyle(
                 Notification.ProgressStyle().setStyledByProgress(false).setProgress(done)
-                    .setProgressSegments(listOf(Notification.ProgressStyle.Segment(totalSec))),
+                    .setProgressSegments(listOf(Notification.ProgressStyle.Segment(totalSec).setColor(0xFF7FA87F.toInt()))),
             )
         } else setProgress(totalSec, done, false)
     }
@@ -587,6 +591,17 @@ class FocusService : Service(), SensorEventListener {
     private fun chipText(): String {
         val s = ((endWall - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
         return if (s >= 3600) "%dh%02dm".format(s / 3600, (s % 3600) / 60) else "%02d:%02d".format(s / 60, s % 60)
+    }
+
+    /** Reports whether Android treats our notification as a live update (shown on the Focus screen while running). */
+    private fun liveDiag() {
+        try {
+            val n = getSystemService(NotificationManager::class.java).activeNotifications.firstOrNull { it.id == NID }?.notification ?: return
+            val promotable = runCatching { Notification::class.java.getMethod("hasPromotableCharacteristics").invoke(n) as Boolean }.getOrNull()
+            val flag = runCatching { Notification::class.java.getField("FLAG_PROMOTED_ONGOING").getInt(null) }.getOrNull()
+            val promoted = flag?.let { n.flags and it != 0 }
+            FocusState.liveDiag = "live: allowed=${canLive()} promotable=${promotable ?: "?"} promoted=${promoted ?: "?"}"
+        } catch (_: Exception) {}
     }
 
     private fun refreshNotif() { getSystemService(NotificationManager::class.java).notify(NID, notif()) }
