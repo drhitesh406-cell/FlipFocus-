@@ -251,3 +251,11 @@ object Prefs {
 
 fun Context.hasUsageAccess(): Boolean = getSystemService(AppOpsManager::class.java)
     .unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName) == AppOpsManager.MODE_ALLOWED
+
+/** USE_FULL_SCREEN_INTENT is only user-revocable on Android 14+. */
+fun Context.canFsi(): Boolean = android.os.Build.VERSION.SDK_INT < 34 ||
+    getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
+
+/** Android 16+ "live notifications" (status-bar chip / Samsung Now Bar) can be switched off per app. */
+fun Context.canLive(): Boolean = android.os.Build.VERSION.SDK_INT < 36 ||
+    getSystemService(android.app.NotificationManager::class.java).canPostPromotedNotifications()

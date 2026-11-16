@@ -103,8 +103,17 @@ class FocusService : Service(), SensorEventListener {
     private var lastReg = 0L
     private var lastVibAt = 0L
     private var rxReg = false
+    private var sessionTitle = "Focus session"
+    private var statusText = "Starting…"
+    private var endWall = 0L
+    private var noteUntil = 0L
+    private var lastTingAt = 0L
+    private var breakEndWall = 0L
     private val screenRx = object : BroadcastReceiver() {
-        override fun onReceive(c: Context, i: Intent) { if (!breakActive && !finished && !stopping) registerSensors() }
+        override fun onReceive(c: Context, i: Intent) {
+            if (i.action == Intent.ACTION_USER_PRESENT) getSystemService(NotificationManager::class.java).cancel(2)
+            if (!breakActive && !finished && !stopping) registerSensors()
+        }
     }
 
     private var sessionId = 0L
@@ -182,6 +191,10 @@ class FocusService : Service(), SensorEventListener {
         startWall = System.currentTimeMillis()
         sessionId = dao.insert(SessionEntity(startMs = startWall, plannedMs = plannedMs, scheduled = scheduled))
         FocusState.sessionId = sessionId
+        endWall = startWall + plannedMs
+        sessionTitle = if (scheduled) "Schedule · " + ((if (scheduleId > 0) dao.schedule(scheduleId)?.name else null)?.ifBlank { "Focus" } ?: "Focus")
+            else "Focus session · ${plannedMs / 60_000} min"
+        refreshNotif()
         FocusState.totalMs.value = plannedMs
         FocusState.remainingMs.value = plannedMs
 
@@ -202,6 +215,7 @@ class FocusService : Service(), SensorEventListener {
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
             PackageManager.ResolveInfoFlags.of(0L),
         ).map { it.activityInfo.packageName }.toSet()
+        if (scheduled && (!power.isInteractive || kg?.isKeyguardLocked == true)) postStartFsi()
         registerSensors()
         try {
             registerReceiver(screenRx, IntentFilter().apply {
@@ -258,7 +272,10 @@ class FocusService : Service(), SensorEventListener {
                 }
                 val down = zf < (if (near) DOWN_Z else -8.0f)
                 if (down) {
-                    if (downSince == 0L) downSince = now
+                    if (downSince == 0L) {
+                        downSince = now
+                        if (upSince != 0L && now - upSince >= 1_000L && now - lastTingAt > 3_000L) { lastTingAt = now; Chime.play(1) }
+                    }
                     upSince = 0L
                     failSince = 0L
                     if (violating && now - downSince >= RECOVER_MS) {
@@ -287,9 +304,19 @@ class FocusService : Service(), SensorEventListener {
             }
             // Unlock haptics can cancel an ongoing repeating vibration: restart it (gentle 0.5s on / 1.5s off pulses) while still face-up.
             if (violating && !paused && !FocusState.utilityActive && now - lastVibAt >= 4_000L) startVib()
+            val st = when {
+                now < noteUntil -> "Buzzed: you opened another app"
+                FocusState.phase.value == Phase.VIOLATION -> "Vibrating: phone is face-up. Place it face-down"
+                FocusState.phase.value == Phase.UTILITY -> "Utility app open · vibration paused"
+                FocusState.phase.value == Phase.PAUSED_CALL -> "Paused for call"
+                FocusState.phase.value == Phase.ARMING -> "Place phone face-down"
+                else -> "Phone face-down · stay focused"
+            }
+            if (st != statusText) { statusText = st; refreshNotif() }
             FocusState.remainingMs.value = end - now
             delay(250)
         }
+        if (sessionCompleted && !stopping) Chime.play(2)
         if (sessionCompleted && !stopping && !failed) runBreak()
         finish(sessionCompleted)
     }
@@ -304,6 +331,7 @@ class FocusService : Service(), SensorEventListener {
         FocusState.phase.value = Phase.BREAK
         FocusState.totalMs.value = BREAK_MS
         FocusState.remainingMs.value = BREAK_MS
+        breakEndWall = System.currentTimeMillis() + BREAK_MS
         showBreakNotification()
         if (::sm.isInitialized && sensorsRegistered) { sm.unregisterListener(this); sensorsRegistered = false }
         if (telReg) { tm.unregisterTelephonyCallback(callCb); telReg = false }
@@ -332,6 +360,7 @@ class FocusService : Service(), SensorEventListener {
         finished = true
         job?.cancel()
         unregRx()
+        getSystemService(NotificationManager::class.java).cancel(2)
         stopVib()
         wl?.let { if (it.isHeld) it.release() }
         if (::sm.isInitialized && sensorsRegistered) { sm.unregisterListener(this); sensorsRegistered = false }
@@ -421,6 +450,7 @@ class FocusService : Service(), SensorEventListener {
         if (nowElapsed - lastAppBuzz < APP_COOLDOWN_MS) return
         curBuzzed = true
         lastAppBuzz = nowElapsed
+        noteUntil = nowElapsed + 8_000L
         buzz(VibrationEffect.createOneShot(600, VibrationEffect.DEFAULT_AMPLITUDE))
         val sid = sessionId
         val ts = System.currentTimeMillis()
@@ -485,10 +515,16 @@ class FocusService : Service(), SensorEventListener {
         )
         return Notification.Builder(this, CH)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("Focus session active")
-            .setContentText("Keep your phone face-down · utility apps pause vibration")
+            .setContentTitle(sessionTitle)
+            .setContentText(statusText)
+            .setStyle(Notification.BigTextStyle().bigText(statusText))
             .setContentIntent(open)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .apply { if (endWall > 0) setWhen(endWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true) }
+            .apply { if (Build.VERSION.SDK_INT >= 36) setRequestPromotedOngoing(true) } // Live update: status-bar chip / Now Bar
+            .addExtras(samsungLive(sessionTitle, statusText))
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "End", stop).build())
             .build()
     }
@@ -501,12 +537,43 @@ class FocusService : Service(), SensorEventListener {
         )
         return Notification.Builder(this, CH)
             .setSmallIcon(R.drawable.ic_stat)
+            .addExtras(samsungLive("Focus break", "Vibration and failure detection are paused"))
             .setContentTitle("Focus break")
+            .setWhen(breakEndWall).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
+            .apply { if (Build.VERSION.SDK_INT >= 36) setRequestPromotedOngoing(true) }
             .setContentText("Vibration and failure detection are paused")
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_stat), "Skip break", skip).build())
             .build()
+    }
+
+    /** Experimental, undocumented One UI "ongoing activity" extras for the Now Bar card; ignored elsewhere. */
+    private fun samsungLive(primary: String, secondary: String) = Bundle().apply {
+        if (!Build.MANUFACTURER.equals("samsung", true)) return@apply
+        putInt("android.ongoingActivityNoti.style", 1)
+        putString("android.ongoingActivityNoti.primaryInfo", primary)
+        putString("android.ongoingActivityNoti.secondaryInfo", secondary)
+        putString("android.ongoingActivityNoti.nowbarPrimaryInfo", primary)
+        putString("android.ongoingActivityNoti.nowbarSecondaryInfo", secondary)
+    }
+
+    private fun refreshNotif() { getSystemService(NotificationManager::class.java).notify(NID, notif()) }
+
+    private fun postStartFsi() {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (!canFsi()) return
+        nm.createNotificationChannel(NotificationChannel("focus_start", "Session start", NotificationManager.IMPORTANCE_HIGH).apply {
+            setSound(null, null); enableVibration(false)
+        })
+        val pi = PendingIntent.getActivity(
+            this, 3, Intent(this, MainActivity::class.java).putExtra("fsi", true).putExtra("tab", 0)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        nm.notify(2, Notification.Builder(this, "focus_start").setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(sessionTitle).setContentText("Focus session started")
+            .setCategory(Notification.CATEGORY_ALARM).setFullScreenIntent(pi, true).setContentIntent(pi).setAutoCancel(true).build())
     }
 
     private fun showBreakNotification() {
