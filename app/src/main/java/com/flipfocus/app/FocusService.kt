@@ -4,7 +4,9 @@ import android.Manifest
 import android.app.*
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.IntentFilter
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
@@ -97,6 +99,13 @@ class FocusService : Service(), SensorEventListener {
     private var curSince = 0L
     private var curBuzzed = false
     private var lastAppBuzz = 0L
+    private var lastAccelAt = 0L
+    private var lastReg = 0L
+    private var lastVibAt = 0L
+    private var rxReg = false
+    private val screenRx = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) { if (!breakActive && !finished && !stopping) registerSensors() }
+    }
 
     private var sessionId = 0L
     private var startWall = 0L
@@ -193,12 +202,13 @@ class FocusService : Service(), SensorEventListener {
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
             PackageManager.ResolveInfoFlags.of(0L),
         ).map { it.activityInfo.packageName }.toSet()
-        sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
-            sm.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL); sensorsRegistered = true
-        }
-        sm.getDefaultSensor(Sensor.TYPE_PROXIMITY)?.let {
-            sm.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL); sensorsRegistered = true
-        }
+        registerSensors()
+        try {
+            registerReceiver(screenRx, IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON); addAction(Intent.ACTION_USER_PRESENT)
+            }, Context.RECEIVER_NOT_EXPORTED)
+            rxReg = true
+        } catch (_: Exception) {}
         if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
             try { tm.registerTelephonyCallback(mainExecutor, callCb); telReg = true } catch (_: SecurityException) {}
         }
@@ -216,6 +226,8 @@ class FocusService : Service(), SensorEventListener {
             if (now >= end) { sessionCompleted = true; break }
 
             pollForeground(now)
+            // Sensors can go silent across screen-off/lock on some devices: re-register when events stop.
+            if (sensorsRegistered && now - lastAccelAt > 2_500L && now - lastReg > 2_000L) registerSensors()
             if (!power.isInteractive) FocusState.setUtility(null)
             val util = FocusState.utilityActive
 
@@ -265,6 +277,8 @@ class FocusService : Service(), SensorEventListener {
                     if (now - failSince >= FAIL_MS) markFailed()
                 }
             }
+            // Unlock haptics can cancel an ongoing repeating vibration: restart it while still face-up.
+            if (violating && !paused && !FocusState.utilityActive && now - lastVibAt >= 2_000L) startVib()
             FocusState.remainingMs.value = end - now
             delay(250)
         }
@@ -274,6 +288,7 @@ class FocusService : Service(), SensorEventListener {
 
     private suspend fun runBreak() {
         breakActive = true
+        unregRx()
         breakSkip = false
         stopVib()
         FocusState.setUtility(null)
@@ -308,6 +323,7 @@ class FocusService : Service(), SensorEventListener {
         stopping = true
         finished = true
         job?.cancel()
+        unregRx()
         stopVib()
         wl?.let { if (it.isHeld) it.release() }
         if (::sm.isInitialized && sensorsRegistered) { sm.unregisterListener(this); sensorsRegistered = false }
@@ -333,6 +349,7 @@ class FocusService : Service(), SensorEventListener {
 
     override fun onDestroy() {
         scope.cancel()
+        unregRx()
         if (!finished) {
             stopping = true
             stopVib()
@@ -347,6 +364,7 @@ class FocusService : Service(), SensorEventListener {
     override fun onSensorChanged(e: SensorEvent) {
         when (e.sensor.type) {
             Sensor.TYPE_ACCELEROMETER -> {
+                lastAccelAt = SystemClock.elapsedRealtime()
                 zf = 0.8f * zf + 0.2f * e.values[2]
                 hasZSample = true
                 FocusState.z.value = zf
@@ -418,7 +436,18 @@ class FocusService : Service(), SensorEventListener {
         FocusState.pendingTags.value = FocusState.pendingTags.value + PickupTag(id, ts)
     }
 
-    private fun startVib() = buzz(VibrationEffect.createWaveform(longArrayOf(0, 500, 300), 0))
+    private fun startVib() { lastVibAt = SystemClock.elapsedRealtime(); buzz(VibrationEffect.createWaveform(longArrayOf(0, 500, 300), 0)) }
+
+    private fun registerSensors() {
+        if (!::sm.isInitialized) return
+        sm.unregisterListener(this)
+        sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL); sensorsRegistered = true }
+        sm.getDefaultSensor(Sensor.TYPE_PROXIMITY)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL); sensorsRegistered = true }
+        lastReg = SystemClock.elapsedRealtime()
+        lastAccelAt = lastReg
+    }
+
+    private fun unregRx() { if (rxReg) { try { unregisterReceiver(screenRx) } catch (_: Exception) {}; rxReg = false } }
 
     @Suppress("DEPRECATION")
     private fun buzz(e: VibrationEffect) {
